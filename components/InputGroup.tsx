@@ -18,7 +18,8 @@ export const InputGroup: React.FC<InputGroupProps> = ({
   placeholder,
   isTextArea = false 
 }) => {
-  const classes = "w-full px-5 py-4 md:py-3.5 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white placeholder:text-slate-700 focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all active:bg-white/10";
+  // Ajustado padding de px-5 para px-4 para melhor legibilidade em campos pequenos
+  const classes = "w-full px-4 py-4 md:py-3.5 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white placeholder:text-slate-700 focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all active:bg-white/10";
   
   return (
     <div className="flex flex-col gap-2 md:gap-2.5">

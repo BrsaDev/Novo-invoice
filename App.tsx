@@ -137,6 +137,12 @@ const EntityForm: React.FC<EntityFormProps> = ({
   </section>
 );
 
+interface Toast {
+  id: number;
+  message: string;
+  type: 'success' | 'error' | 'info';
+}
+
 type ViewState = 'landing' | 'editor' | 'history' | 'mei-report';
 
 const App: React.FC = () => {
@@ -155,6 +161,8 @@ const App: React.FC = () => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
 
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const invoiceRef = useRef<HTMLDivElement>(null);
 
@@ -171,6 +179,14 @@ const App: React.FC = () => {
       loadHistory();
     }
   }, [session]);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4000);
+  };
 
   const loadProfile = async () => {
     const { data: profile } = await supabase.from('profiles').select('*').single();
@@ -235,9 +251,33 @@ const App: React.FC = () => {
     }
   };
 
+  const dashboardMetrics = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    const currentMonth = now.getMonth();
+
+    const yearItems = history.filter(h => new Date(h.timestamp).getFullYear() === currentYear);
+    const monthItems = history.filter(h => {
+      const d = new Date(h.timestamp);
+      return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
+    });
+
+    const totalAnnual = yearItems.reduce((acc, curr) => acc + curr.totalValue, 0);
+    const totalMonthly = monthItems.reduce((acc, curr) => acc + curr.totalValue, 0);
+    const avgTicket = yearItems.length > 0 ? totalAnnual / yearItems.length : 0;
+    const meiLimit = 81000;
+    const remainingMei = Math.max(0, meiLimit - totalAnnual);
+    const progress = Math.min(100, (totalAnnual / meiLimit) * 100);
+
+    return { totalAnnual, totalMonthly, avgTicket, remainingMei, progress, yearItemsCount: yearItems.length, monthItemsCount: monthItems.length };
+  }, [history]);
+
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loginEmail || !loginPass) return;
+    if (!loginEmail || !loginPass) {
+        showToast('Preencha todos os campos.', 'error');
+        return;
+    }
     setIsLoggingIn(true);
     try {
       if (authMode === 'signup') {
@@ -247,12 +287,22 @@ const App: React.FC = () => {
           options: { data: { full_name: userName } }
         });
         if (error) throw error;
-        alert('Confirme seu e-mail.');
+        showToast('Sucesso! Verifique seu e-mail para confirmar a conta.', 'success');
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email: loginEmail, password: loginPass });
-        if (error) throw error;
+        if (error) {
+            if (error.message.includes('Invalid login credentials')) {
+                throw new Error('E-mail ou senha incorretos.');
+            }
+            throw error;
+        }
+        showToast('Login realizado com sucesso.', 'success');
       }
-    } catch (error: any) { alert(error.message); } finally { setIsLoggingIn(false); }
+    } catch (error: any) { 
+        showToast(error.message || 'Erro ao processar autenticação.', 'error'); 
+    } finally { 
+        setIsLoggingIn(false); 
+    }
   };
 
   const handleLogout = async () => { await supabase.auth.signOut(); setView('landing'); };
@@ -288,7 +338,12 @@ const App: React.FC = () => {
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save(`NovaInvoice_${data.invoiceNumber}.pdf`);
       await saveToHistory();
-    } catch (error) { alert("Erro ao gerar PDF."); } finally { setIsEmitting(false); }
+      showToast('Documento PDF gerado com sucesso.', 'success');
+    } catch (error) { 
+        showToast("Erro crítico ao gerar PDF.", 'error'); 
+    } finally { 
+        setIsEmitting(false); 
+    }
   };
 
   const saveGlobalSettings = async () => {
@@ -313,13 +368,19 @@ const App: React.FC = () => {
       template: data.branding.template,
       updated_at: new Date().toISOString()
     });
-    if (error) alert('Erro ao salvar.');
-    else triggerButtonFeedback('save-pattern-btn');
+    if (error) showToast('Erro ao sincronizar configurações.', 'error');
+    else {
+        showToast('Configurações salvas globalmente.', 'success');
+        triggerButtonFeedback('save-pattern-btn');
+    }
   };
 
   const handleSaveClient = async () => {
     const entity = data.client;
-    if(!entity.name || !entity.taxId) return alert('Campos obrigatórios vazios.');
+    if(!entity.name || !entity.taxId) {
+        showToast('Nome e Documento são obrigatórios para salvar.', 'error');
+        return;
+    }
     await supabase.from('clients').upsert({
       user_id: session.user.id,
       name: entity.name,
@@ -335,6 +396,7 @@ const App: React.FC = () => {
       phone: entity.phone
     }, { onConflict: 'user_id, tax_id' });
     loadClients();
+    showToast('Cliente atualizado na base de dados.', 'success');
     triggerButtonFeedback('save-client-btn');
   };
 
@@ -377,6 +439,24 @@ const App: React.FC = () => {
       <div className="min-h-screen bg-[#020617] flex flex-col md:flex-row p-6 md:p-12 relative overflow-hidden items-center justify-center gap-10 md:gap-20">
         <div className="absolute top-[-20%] left-[-10%] w-[70%] h-[70%] bg-blue-600/5 blur-[150px] rounded-full bg-orb pointer-events-none"></div>
         
+        {/* Toast Container for Login Screen */}
+        <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">
+          {toasts.map(toast => (
+            <div key={toast.id} className={`pointer-events-auto flex items-center gap-4 px-6 py-4 rounded-2xl backdrop-blur-3xl border shadow-2xl animate-in slide-in-from-right-10 fade-in duration-300 ${
+              toast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+              toast.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' :
+              'bg-blue-500/10 border-blue-500/20 text-blue-400'
+            }`}>
+              <div className={`w-2 h-2 rounded-full ${
+                toast.type === 'success' ? 'bg-emerald-500' :
+                toast.type === 'error' ? 'bg-rose-500' :
+                'bg-blue-500'
+              }`}></div>
+              <span className="text-[11px] font-black uppercase tracking-widest">{toast.message}</span>
+            </div>
+          ))}
+        </div>
+
         {/* Lado Esquerdo - Hero Content */}
         <div className="w-full max-w-2xl space-y-12 z-10 text-center md:text-left">
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-full">
@@ -457,6 +537,24 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#020617] text-white relative overflow-x-hidden font-['Inter']">
       <div className="fixed top-[-10%] left-[-5%] w-[60%] h-[60%] bg-blue-600/5 blur-[120px] rounded-full pointer-events-none bg-orb"></div>
       
+      {/* Toast Container for App Area */}
+      <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">
+        {toasts.map(toast => (
+          <div key={toast.id} className={`pointer-events-auto flex items-center gap-4 px-6 py-4 rounded-2xl backdrop-blur-3xl border shadow-2xl animate-in slide-in-from-right-10 fade-in duration-300 ${
+            toast.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+            toast.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' :
+            'bg-blue-500/10 border-blue-500/20 text-blue-400'
+          }`}>
+            <div className={`w-2 h-2 rounded-full ${
+              toast.type === 'success' ? 'bg-emerald-500' :
+              toast.type === 'error' ? 'bg-rose-500' :
+              'bg-blue-500'
+            }`}></div>
+            <span className="text-[11px] font-black uppercase tracking-widest">{toast.message}</span>
+          </div>
+        ))}
+      </div>
+
       <ClientSearchModal 
         isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} clients={savedClients} 
         onSelect={(c) => { setData(prev => ({ ...prev, client: c })); setIsModalOpen(false); }} 
@@ -482,13 +580,111 @@ const App: React.FC = () => {
         </div>
       ) : (view === 'history' || view === 'mei-report') ? (
         <div className="min-h-screen p-6 md:p-16 z-10 relative">
-          <div className="max-w-6xl mx-auto">
-            <header className="flex flex-col md:flex-row md:justify-between md:items-end mb-16 gap-6"><button onClick={() => setView('landing')} className="text-blue-400 font-black uppercase tracking-[0.2em] text-[10px] mb-4 block">← Voltar</button><h1 className="text-4xl md:text-6xl font-black text-white tracking-tighter">Histórico Pro</h1></header>
+          <div className="max-w-6xl mx-auto space-y-16">
+            <header className="flex flex-col md:flex-row md:justify-between md:items-end gap-6">
+              <div>
+                <button onClick={() => setView('landing')} className="text-blue-400 font-black uppercase tracking-[0.2em] text-[10px] mb-4 flex items-center gap-2 hover:translate-x-[-4px] transition-transform">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+                  Voltar ao Console
+                </button>
+                <h1 className="text-4xl md:text-6xl font-black text-white tracking-tighter">Faturamento <span className="text-slate-500">Cloud</span></h1>
+              </div>
+              <div className="flex gap-4">
+                 <button onClick={handleNewDocument} className="px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-blue-600/20 hover:scale-105 transition-all">Nova Emissão</button>
+              </div>
+            </header>
+
+            {/* DASHBOARD APRIMORADO */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+               {/* Card Limite MEI */}
+               <div className="lg:col-span-2 bg-[#0f172a]/60 backdrop-blur-3xl p-10 rounded-[3rem] border border-white/10 shadow-2xl relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/5 blur-3xl rounded-full translate-x-1/2 -translate-y-1/2"></div>
+                  <div className="flex justify-between items-start mb-10">
+                    <div>
+                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Teto Anual MEI</h4>
+                      <p className="text-5xl font-black text-white tracking-tighter">R$ 81.000,00</p>
+                    </div>
+                    <div className="text-right">
+                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Utilizado</h4>
+                      <p className="text-2xl font-black text-blue-400 tracking-tight">{Math.round(dashboardMetrics.progress)}%</p>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
+                       <div className="h-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-1000 ease-out" style={{ width: `${dashboardMetrics.progress}%` }}></div>
+                    </div>
+                    <div className="flex justify-between text-[10px] font-black uppercase tracking-widest">
+                       <span className="text-slate-500">Acumulado: {formatCurrency(dashboardMetrics.totalAnnual)}</span>
+                       <span className="text-blue-400">Restante: {formatCurrency(dashboardMetrics.remainingMei)}</span>
+                    </div>
+                  </div>
+
+                  <div className="mt-12 pt-8 border-t border-white/5 grid grid-cols-2 md:grid-cols-3 gap-8">
+                     <div>
+                        <span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Faturamento Mensal</span>
+                        <p className="text-xl font-black text-white">{formatCurrency(dashboardMetrics.totalMonthly)}</p>
+                     </div>
+                     <div>
+                        <span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Ticket Médio</span>
+                        <p className="text-xl font-black text-white">{formatCurrency(dashboardMetrics.avgTicket)}</p>
+                     </div>
+                     <div className="hidden md:block">
+                        <span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Total Emissões</span>
+                        <p className="text-xl font-black text-white">{dashboardMetrics.yearItemsCount} un</p>
+                     </div>
+                  </div>
+               </div>
+
+               {/* Card Resumo Rápido */}
+               <div className="bg-[#0f172a]/40 backdrop-blur-2xl p-10 rounded-[3rem] border border-white/10 flex flex-col justify-between group hover:border-blue-500/30 transition-all">
+                  <div>
+                    <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center mb-6 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-all">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                    </div>
+                    <h3 className="text-xl font-black text-white mb-2">Projeção MEI</h3>
+                    <p className="text-slate-500 text-xs leading-relaxed">Com base no seu histórico anual, você está operando dentro da conformidade fiscal estabelecida para 2024.</p>
+                  </div>
+                  <div className="mt-8">
+                     <div className="flex items-center gap-3 py-3 px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
+                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
+                        <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">Status: Saudável</span>
+                     </div>
+                  </div>
+               </div>
+            </div>
+
+            {/* LISTA DE REGISTROS */}
             <div className="space-y-6">
-              {history.length === 0 ? (<div className="text-center py-24 bg-white/5 rounded-[3rem] border border-dashed border-white/10 text-slate-500 font-black uppercase tracking-widest text-xs">Sem emissões recentes</div>) : history.map(item => (
-                <div key={item.id} className="bg-white/5 backdrop-blur-xl border border-white/10 p-6 md:p-10 rounded-[2.5rem] flex flex-col md:flex-row md:items-center justify-between hover:border-blue-500/50 transition-all gap-6 shadow-2xl">
-                  <div><h4 className="font-black text-white text-xl uppercase tracking-tight">{item.clientName}</h4><p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-2">DOC: #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}</p></div>
-                  <div className="flex items-center gap-10"><span className="font-black text-2xl text-white tracking-tighter">{formatCurrency(item.totalValue)}</span><button onClick={() => { setData(item.data); setView('editor'); }} className="px-6 py-4 bg-white/5 text-blue-400 border border-white/10 rounded-2xl hover:bg-blue-600 hover:text-white transition-all font-black text-[10px] uppercase tracking-widest">Abrir</button></div>
+              <div className="flex items-center justify-between mb-8 px-4">
+                 <h3 className="text-[11px] font-black text-slate-500 uppercase tracking-[0.3em]">Emissões Recentes</h3>
+                 <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">{history.length} Documentos Totais</span>
+              </div>
+              {history.length === 0 ? (
+                <div className="text-center py-32 bg-white/5 rounded-[4rem] border border-dashed border-white/10 text-slate-500 font-black uppercase tracking-widest text-xs">
+                  Sem emissões registradas no sistema
+                </div>
+              ) : history.map(item => (
+                <div key={item.id} className="group bg-white/5 backdrop-blur-xl border border-white/10 p-6 md:p-10 rounded-[3rem] flex flex-col md:flex-row md:items-center justify-between hover:border-blue-500/50 hover:bg-white/[0.07] transition-all gap-6 shadow-2xl">
+                  <div className="flex items-center gap-8">
+                    <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all">
+                       #{item.data.invoiceNumber.slice(-2)}
+                    </div>
+                    <div>
+                      <h4 className="font-black text-white text-xl uppercase tracking-tight">{item.clientName}</h4>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1.5 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
+                        DOCUMENTO #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-10">
+                    <div className="text-right">
+                      <span className="font-black text-2xl text-white tracking-tighter block">{formatCurrency(item.totalValue)}</span>
+                      <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Líquido Recebido</span>
+                    </div>
+                    <button onClick={() => { setData(item.data); setView('editor'); }} className="px-8 py-5 bg-white/5 text-blue-400 border border-white/10 rounded-2xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all font-black text-[10px] uppercase tracking-widest active:scale-95">Abrir</button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -497,9 +693,25 @@ const App: React.FC = () => {
       ) : (
         <div className="min-h-screen flex flex-col lg:flex-row relative z-10">
           <div className="no-print w-full lg:w-[500px] bg-[#0f172a]/60 backdrop-blur-3xl border-r border-white/10 lg:h-screen lg:overflow-y-auto p-6 md:p-10 space-y-10 scrollbar-hide">
-            <header className="flex justify-between items-center mb-10"><button onClick={() => setView('landing')} className="text-blue-400 font-black tracking-tighter text-2xl uppercase">NovaInvoice</button></header>
+            <header className="flex flex-col gap-6 mb-10">
+              <div className="flex justify-between items-center">
+                <button onClick={() => setView('landing')} className="text-blue-400 font-black tracking-tighter text-2xl uppercase">NovaInvoice</button>
+                <div className="flex gap-2">
+                  <button onClick={() => setView('history')} title="Dashboard" className="p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-blue-600 hover:border-blue-600 transition-all">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+                  </button>
+                  <button onClick={() => setView('landing')} title="Cancelar" className="p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-red-500/20 hover:border-red-500 transition-all text-slate-500 hover:text-red-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                  </button>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                 <button onClick={() => setView('history')} className="flex-1 py-3 text-[10px] font-black uppercase tracking-widest bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-600/20 hover:scale-[1.02] transition-all">Ir ao Dashboard</button>
+                 <button onClick={() => setView('landing')} className="px-6 py-3 text-[10px] font-black uppercase tracking-widest bg-white/5 border border-white/10 text-slate-500 rounded-xl hover:bg-white/10 transition-all">Cancelar</button>
+              </div>
+            </header>
 
-            {/* SEÇÃO IDENTIDADE VISUAL - FIDELIDADE AO PRINT */}
+            {/* SEÇÃO IDENTIDADE VISUAL */}
             <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-8 relative">
               <div className="flex justify-between items-center">
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">IDENTIDADE VISUAL</h3>
@@ -543,7 +755,6 @@ const App: React.FC = () => {
               </div>
             </section>
 
-            {/* RESTAURAÇÃO DE SEÇÕES SUMIDAS */}
             <section className="bg-white/5 backdrop-blur-xl p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-2xl space-y-6">
               <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Cronologia e Identificação</h3>
               <div className="grid grid-cols-2 gap-5">
