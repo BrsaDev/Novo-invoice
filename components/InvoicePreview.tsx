@@ -23,11 +23,12 @@ const CustomLogo = ({ primary, secondary, letter, image, size = 60 }: { primary:
 export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
   const subtotal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
   const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
-  const issValue = (subtotal * data.taxRate) / 100;
+  const taxValue = (subtotal * data.taxRate) / 100;
   const total = subtotal - totalTaxes - (data.discount || 0);
   const primaryColor = data.branding.primaryColor;
   const secondaryColor = data.branding.secondaryColor;
   const template = data.branding.template || 'classic';
+  const isProduct = data.category === 'product';
 
   const formatFullAddress = (e: Entity) => {
     const parts = [];
@@ -40,7 +41,6 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
     if (e.neighborhood) parts.push(e.neighborhood);
     if (e.city) parts.push(`${e.city}${e.uf ? ' / ' + e.uf : ''}`);
     if (e.zipCode) parts.push(`CEP: ${e.zipCode}`);
-    
     return parts.join(' - ') || '-';
   };
 
@@ -63,6 +63,7 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
         </div>
         <div className="w-1/2 p-4 border-r border-black flex flex-col items-center justify-center text-center">
           <h1 className="text-xl font-black mb-0.5 tracking-tighter uppercase" style={{ color: primaryColor }}>{data.provider.name}</h1>
+          {data.provider.tradingName && <h3 className="text-[11px] font-bold text-slate-600 uppercase mb-1">{data.provider.tradingName}</h3>}
           <h2 className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mb-3">{data.labels.documentSubtitle}</h2>
           <div className="border border-black px-6 py-2 rounded-sm bg-slate-50">
             <span className="text-xs font-bold uppercase tracking-widest text-slate-900">{data.labels.documentTitle}</span>
@@ -73,55 +74,78 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
           <div className="h-1/2 flex flex-col items-center justify-center p-1"><span className="text-[9px] font-bold uppercase text-slate-400">Série</span><span className="text-sm font-black text-slate-900">{data.serie || 'ÚNICA'}</span></div>
         </div>
       </div>
-      <Row className="bg-slate-50/50">
-        <Cell label="Emissão:" value={formatDate(data.issueDate)} className="w-1/2" />
-        <Cell label="Competência:" value={data.competency} className="w-1/2" />
-      </Row>
       
       {[
-        { title: data.labels.providerSection, entity: data.provider, bgColor: primaryColor, textColor: 'white' },
-        { title: data.labels.clientSection, entity: data.client, bgColor: primaryColor, textColor: 'white' }
+        { title: data.labels.providerSection, entity: data.provider },
+        { title: data.labels.clientSection, entity: data.client }
       ].map((sec, i) => (
         <React.Fragment key={i}>
-          <div className="text-center py-1.5 border-b border-black font-bold text-[10px] uppercase tracking-widest" style={{ backgroundColor: sec.bgColor, color: sec.textColor }}>{sec.title}</div>
-          <Row><Cell label="Nome / Razão Social:" value={sec.entity.name} className="w-full" /></Row>
+          <div className="text-center py-1.5 border-b border-black font-bold text-[10px] uppercase tracking-widest" style={{ backgroundColor: primaryColor, color: 'white' }}>{sec.title}</div>
           <Row>
-            <Cell label="CPF / CNPJ:" value={sec.entity.taxId} className="w-1/3" />
-            <Cell label="E-mail:" value={sec.entity.email} className="w-1/3" />
-            <Cell label="Telefone:" value={sec.entity.phone} className="w-1/3" />
+            <Cell label="Razão Social / Nome:" value={sec.entity.name} className="w-1/2" />
+            <Cell label="Nome Fantasia:" value={sec.entity.tradingName} className="w-1/2" />
           </Row>
-          <Row><Cell label="Endereço:" value={formatFullAddress(sec.entity)} className="w-full" /></Row>
+          <Row>
+            <Cell label="CPF / CNPJ:" value={sec.entity.taxId} className="w-1/4" />
+            <Cell label="Insc. Municipal:" value={sec.entity.im} className="w-1/4" />
+            <Cell label="Insc. Estadual:" value={sec.entity.ie} className="w-1/4" />
+            <Cell label="Telefone:" value={sec.entity.phone} className="w-1/4" />
+          </Row>
+          <Row>
+            <Cell label="Endereço:" value={formatFullAddress(sec.entity)} className="w-2/3" />
+            <Cell label="E-mail:" value={sec.entity.email} className="w-1/3" />
+          </Row>
         </React.Fragment>
       ))}
 
       <div className="bg-slate-100 text-slate-700 text-center py-1.5 border-b border-black font-bold text-[10px] uppercase tracking-widest">{data.labels.itemsSection}</div>
-      <div className="p-6 flex-grow border-b border-black min-h-[250px] bg-white">
-        {data.items.map(item => (
-          <div key={item.id} className="mb-4 flex justify-between border-b border-slate-100 pb-2">
-            <span className="font-bold block text-xs text-slate-900">• {item.description || "Descrição não informada"} (x{item.quantity})</span>
-            <span className="w-32 text-right font-black text-xs text-slate-900">{formatCurrency(item.quantity * item.unitValue)}</span>
-          </div>
-        ))}
-        <div className="mt-8 pt-4 border-t border-slate-100 text-[10px] text-slate-600 italic">
-          <strong className="text-slate-900">Informações Adicionais:</strong> {data.notes}
+      <div className="flex-grow border-b border-black min-h-[250px] bg-white">
+         <table className="w-full text-left">
+            <thead>
+               <tr className="bg-slate-50 text-[8px] font-black uppercase text-slate-400 border-b border-slate-200">
+                  <th className="p-2">Descrição</th>
+                  <th className="p-2 text-center w-20">{isProduct ? 'Unid' : 'Ref'}</th>
+                  <th className="p-2 text-center w-16">Qtd</th>
+                  <th className="p-2 text-right w-24">Unitário</th>
+                  <th className="p-2 text-right w-24">Total</th>
+               </tr>
+            </thead>
+            <tbody>
+               {data.items.map(item => (
+                 <tr key={item.id} className="border-b border-slate-100 last:border-0 text-[10px]">
+                    <td className="p-2">
+                       <span className="font-bold text-slate-900 block">{item.description}</span>
+                       {isProduct && item.ncm && <span className="text-[7px] text-slate-400 font-mono">NCM: {item.ncm}</span>}
+                    </td>
+                    <td className="p-2 text-center text-slate-600 uppercase">{isProduct ? item.unit || 'un' : '-'}</td>
+                    <td className="p-2 text-center text-slate-900">{item.quantity}</td>
+                    <td className="p-2 text-right text-slate-600">{formatCurrency(item.unitValue)}</td>
+                    <td className="p-2 text-right font-bold text-slate-900">{formatCurrency(item.quantity * item.unitValue)}</td>
+                 </tr>
+               ))}
+            </tbody>
+         </table>
+        <div className="p-4 mt-auto text-[10px] text-slate-600 italic">
+          <strong className="text-slate-900">Obs:</strong> {data.notes}
         </div>
       </div>
+
       <div className="flex border-b border-black h-36 bg-slate-50">
         <div className="w-1/3 p-4 border-r border-black flex flex-col items-center justify-center">
           {data.provider.pixKey && (
              <>
-               <span className="text-[7px] font-black uppercase mb-1 text-slate-900">Pagamento via PIX</span>
+               <span className="text-[7px] font-black uppercase mb-1 text-slate-900">PIX para Recebimento</span>
                <img src={getPixQrCodeUrl(data.provider.pixKey, total, data.provider.name, data.provider.city)} className="w-20 h-20" />
-               <span className="text-[7px] font-mono mt-1 text-slate-600">{data.provider.pixKey}</span>
+               <span className="text-[6px] font-bold text-slate-400 mt-1">{data.provider.pixKey}</span>
              </>
           )}
         </div>
         <div className="w-2/3 grid grid-cols-4">
            <Cell label="VALOR BRUTO" value={formatCurrency(subtotal)} />
-           <Cell label="DESCONTO" value={formatCurrency(data.discount || 0)} valueClass="text-red-600" />
+           <Cell label="DESCONTOS" value={formatCurrency(data.discount || 0)} valueClass="text-red-600" />
            <Cell label="RETENÇÕES" value={formatCurrency(totalTaxes)} />
-           <Cell label="VALOR DO ISS" value={formatCurrency(issValue)} />
-           <Cell label="CÓD. SERVIÇO" value={data.serviceCode} className="col-span-3" />
+           <Cell label={isProduct ? "EST. IMPOSTO" : "VALOR ISS"} value={formatCurrency(taxValue)} />
+           <Cell label={isProduct ? "CFOP / NATUREZA" : "CÓD. SERVIÇO"} value={data.serviceCode} className="col-span-3" />
            <Cell label="CNAE" value={data.cnae} />
         </div>
       </div>
@@ -135,35 +159,39 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
         <div>
           <CustomLogo primary={primaryColor} secondary={secondaryColor} letter={data.branding.logoLetter} size={80} image={data.branding.logoImage} />
           <h1 className="mt-8 text-3xl font-black tracking-tighter" style={{ color: primaryColor }}>{data.provider.name}</h1>
+          {data.provider.tradingName && <p className="text-sm font-bold text-slate-500 uppercase mt-1">{data.provider.tradingName}</p>}
           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.3em] mt-2">{data.labels.documentSubtitle}</p>
+          <div className="mt-6 space-y-1 text-[9px] font-bold text-slate-500 uppercase">
+             <p>CNPJ: {data.provider.taxId}</p>
+             {data.provider.im && <p>IM: {data.provider.im} {data.provider.ie ? `| IE: ${data.provider.ie}` : ''}</p>}
+          </div>
         </div>
         <div className="text-right">
           <h2 className="text-2xl font-black uppercase tracking-[0.4em] text-slate-200 mb-4">{data.labels.documentTitle}</h2>
           <div className="grid grid-cols-2 gap-x-6 text-[10px] font-bold text-right">
-            <span className="text-slate-400 uppercase">IDENTIFICADOR:</span><span className="text-slate-800">{data.invoiceNumber} / {data.serie || 'U'}</span>
-            <span className="text-slate-400 uppercase">DATA EMISSÃO:</span><span className="text-slate-800">{formatDate(data.issueDate)}</span>
-            <span className="text-slate-400 uppercase">COMPETÊNCIA:</span><span className="text-slate-800">{data.competency}</span>
+             <span className="text-slate-400 uppercase">IDENTIFICADOR:</span><span className="text-slate-800">#{data.invoiceNumber}</span>
+             <span className="text-slate-400 uppercase">CATEGORIA:</span><span className="text-slate-800 uppercase">{isProduct ? 'Produtos' : 'Serviços'}</span>
+             <span className="text-slate-400 uppercase">DATA:</span><span className="text-slate-800">{formatDate(data.issueDate)}</span>
           </div>
         </div>
       </header>
-      <div className="grid grid-cols-2 gap-16 mb-20">
-        {[ { label: 'Prestador:', entity: data.provider }, { label: 'Tomador:', entity: data.client } ].map((item, i) => (
-          <div key={i}>
-            <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-4 border-b pb-2">{item.label}</h4>
-            <p className="text-sm font-bold text-slate-800 uppercase tracking-tight">{item.entity.name}</p>
-            <p className="text-[10px] text-slate-500 mt-3 leading-relaxed">{formatFullAddress(item.entity)}</p>
-          </div>
-        ))}
-      </div>
       <div className="flex-grow">
         <table className="w-full">
           <thead>
-            <tr className="border-b-2 border-slate-100"><th className="py-5 text-[10px] font-black text-slate-400 uppercase text-left tracking-widest">Descrição dos Serviços</th><th className="py-5 text-[10px] font-black text-slate-400 uppercase text-right tracking-widest">Total Líquido</th></tr>
+            <tr className="border-b-2 border-slate-100">
+               <th className="py-5 text-[10px] font-black text-slate-400 uppercase text-left tracking-widest">Descrição</th>
+               <th className="py-5 text-[10px] font-black text-slate-400 uppercase text-center w-24">Qtd / {isProduct ? 'Un' : 'Ref'}</th>
+               <th className="py-5 text-[10px] font-black text-slate-400 uppercase text-right tracking-widest">Valor</th>
+            </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
             {data.items.map(item => (
               <tr key={item.id}>
-                <td className="py-6 text-xs font-bold text-slate-800">{item.description || "Descrição não informada"} (x{item.quantity})</td>
+                <td className="py-6">
+                   <p className="text-sm font-bold text-slate-800 uppercase tracking-tight">{item.description}</p>
+                   {isProduct && item.ncm && <p className="text-[9px] text-slate-400 mt-1">NCM: {item.ncm}</p>}
+                </td>
+                <td className="py-6 text-xs font-bold text-slate-800 text-center uppercase">{item.quantity} {isProduct ? (item.unit || 'un') : ''}</td>
                 <td className="py-6 text-xs font-black text-slate-800 text-right tracking-tight">{formatCurrency(item.quantity * item.unitValue)}</td>
               </tr>
             ))}
@@ -171,22 +199,14 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
         </table>
       </div>
       <footer className="mt-auto pt-10 border-t-2 border-slate-100 flex justify-between items-end">
-        <div className="w-1/2 flex items-center gap-6">
-            {data.provider.pixKey && (
-               <>
-                 <img src={getPixQrCodeUrl(data.provider.pixKey, total, data.provider.name, data.provider.city)} className="w-20 h-20 shadow-sm" />
-                 <div>
-                    <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-1">Pagamento Pix</p>
-                    <p className="text-[11px] font-bold text-slate-800">{data.provider.pixKey}</p>
-                 </div>
-               </>
-            )}
+        <div className="w-1/2">
+           <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-2">Informações Fiscais</p>
+           <p className="text-[10px] text-slate-500">{isProduct ? 'CFOP:' : 'Cód. Serviço:'} {data.serviceCode} • CNAE: {data.cnae}</p>
+           {data.provider.pixKey && <p className="text-[9px] font-bold text-slate-400 mt-2">PIX: {data.provider.pixKey}</p>}
         </div>
-        <div className="w-1/3 text-right">
-          <div className="pt-4 border-t border-slate-100">
-             <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest block mb-1">Total Final</span>
+        <div className="text-right">
+             <span className="text-[10px] font-black text-slate-300 uppercase tracking-widest block mb-1">Total a Receber</span>
              <span className="text-3xl font-black tracking-tighter" style={{ color: primaryColor }}>{formatCurrency(total)}</span>
-          </div>
         </div>
       </footer>
     </div>
@@ -195,41 +215,35 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
   const renderMinimal = () => (
     <div className="p-20 h-full flex flex-col bg-white text-slate-900 border-[1.5px] border-black">
        <div className="flex justify-between items-center mb-24">
-          <div className="flex items-center gap-8">
-             <CustomLogo primary={primaryColor} secondary={secondaryColor} letter={data.branding.logoLetter} size={50} image={data.branding.logoImage} />
-             <div><h1 className="text-lg font-black tracking-tight uppercase leading-none">{data.provider.name}</h1></div>
-          </div>
+          <CustomLogo primary={primaryColor} secondary={secondaryColor} letter={data.branding.logoLetter} size={50} image={data.branding.logoImage} />
           <div className="text-right">
-             <h2 className="text-xs font-black uppercase tracking-[0.5em] text-slate-300">ID #{data.invoiceNumber}</h2>
+            <h2 className="text-xs font-black uppercase tracking-[0.5em] text-slate-300">ID #{data.invoiceNumber} • {isProduct ? 'PROD' : 'SERV'}</h2>
+            <p className="text-[8px] font-bold text-slate-300 uppercase mt-1">{data.provider.name}</p>
           </div>
        </div>
-       <div className="grid grid-cols-2 gap-16 mb-24">
-          {[ { label: 'Empresa', entity: data.provider }, { label: 'Cliente', entity: data.client } ].map((item, i) => (
-            <div key={i} className="space-y-2">
-              <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{item.label}</p>
-              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-tight">{item.entity.name}</h3>
-            </div>
-          ))}
-       </div>
-       <div className="flex-grow space-y-6">
+       <div className="flex-grow space-y-8">
           {data.items.map(item => (
-            <div key={item.id} className="grid grid-cols-12 gap-6 py-5 border-b border-slate-100 last:border-0 items-center">
-               <div className="col-span-9 text-xs font-bold text-slate-800">{item.description || "Descrição não informada"}</div>
-               <div className="col-span-3 text-right text-base font-black text-slate-800 tracking-tight">{formatCurrency(item.quantity * item.unitValue)}</div>
+            <div key={item.id} className="flex justify-between items-center py-5 border-b border-slate-100 last:border-0">
+               <div>
+                  <p className="text-xs font-bold text-slate-800 uppercase">{item.description}</p>
+                  <p className="text-[10px] text-slate-400 mt-1">{item.quantity} x {formatCurrency(item.unitValue)} {isProduct ? item.unit : ''}</p>
+               </div>
+               <div className="text-base font-black text-slate-800 tracking-tight">{formatCurrency(item.quantity * item.unitValue)}</div>
             </div>
           ))}
        </div>
-       <div className="mt-24">
-          <div className="flex justify-between items-center py-6 border-t-2 border-slate-900 w-full">
-             <span className="text-[11px] font-black uppercase tracking-[0.4em] text-slate-400">Total Líquido</span>
-             <span className="text-2xl font-black tracking-tighter text-slate-900">{formatCurrency(total)}</span>
+       <div className="mt-24 py-6 border-t-2 border-slate-900 flex justify-between items-center">
+          <div className="space-y-1">
+            <span className="text-[11px] font-black uppercase tracking-[0.4em] text-slate-400 block">Total Líquido</span>
+            {data.provider.pixKey && <span className="text-[8px] font-bold text-slate-300 uppercase">PIX: {data.provider.pixKey}</span>}
           </div>
+          <span className="text-2xl font-black tracking-tighter text-slate-900">{formatCurrency(total)}</span>
        </div>
     </div>
   );
 
   return (
-    <div id="invoice-capture" className="bg-white w-[800px] min-h-[1100px] flex flex-col border-[10px] border-black p-[10px] shadow-2xl overflow-hidden no-print-margin">
+    <div id="invoice-capture" className="bg-white w-[800px] min-h-[1100px] flex flex-col border-[10px] border-black p-[10px] shadow-2xl overflow-hidden">
       {template === 'classic' && renderClassic()}
       {template === 'modern' && renderModern()}
       {template === 'minimal' && renderMinimal()}

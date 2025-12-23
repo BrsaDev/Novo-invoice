@@ -23,6 +23,8 @@ export interface InvoiceItem {
   description: string;
   quantity: number;
   unitValue: number;
+  unit?: string; // Ex: un, kg, cx (Para Produtos)
+  ncm?: string;  // Código NCM (Para Produtos)
 }
 
 export interface Taxes {
@@ -55,7 +57,10 @@ export interface InvoiceLabels {
   totalLabel: string;
 }
 
+export type InvoiceCategory = 'service' | 'product';
+
 export interface InvoiceData {
+  category: InvoiceCategory;
   invoiceNumber: string;
   serie: string;
   issueDate: string;
@@ -71,12 +76,13 @@ export interface InvoiceData {
   discount: number;
   labels: InvoiceLabels;
   branding: Branding;
-  pdfUrl?: string; // Campo para persistir a URL curta dentro do JSON
+  pdfUrl?: string;
 }
 
 export interface InvoiceHistoryItem {
   id: string;
   timestamp: number;
+  category: InvoiceCategory;
   data: InvoiceData;
   totalValue: number;
   clientName: string;
