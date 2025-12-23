@@ -79,4 +79,5 @@ export interface InvoiceHistoryItem {
   data: InvoiceData;
   totalValue: number;
   clientName: string;
+  pdfUrl?: string;
 }

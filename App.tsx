@@ -20,7 +20,7 @@ const INITIAL_LABELS: InvoiceLabels = {
   totalLabel: 'Valor Líquido do Documento',
 };
 
-const DEFAULT_WA_TEMPLATE = "Olá {cliente}! Segue o seu documento de faturamento #{numero} no valor de {valor}. Qualquer dúvida estou à disposição!";
+const DEFAULT_WA_TEMPLATE = "Olá {cliente}! Segue o seu documento de faturamento #{numero} no valor de {valor}. Você pode visualizar o documento aqui: {link}";
 
 const INITIAL_BRANDING: Branding = {
   primaryColor: '#006494',
@@ -110,7 +110,12 @@ const EntityForm: React.FC<EntityFormProps> = ({
       <InputGroup label="Telefone Fixo / Comercial" value={entity.phone} onChange={(e) => updateFn('phone', e.target.value)} />
     </div>
     {isClient && (
-      <InputGroup label="WhatsApp de Cobrança (Celular)" value={entity.whatsapp || ''} onChange={(e) => updateFn('whatsapp', e.target.value)} placeholder="Ex: 11999999999" />
+      <InputGroup 
+        label="WhatsApp de Cobrança (Celular)" 
+        value={entity.whatsapp || ''} 
+        onChange={(e) => updateFn('whatsapp', e.target.value)} 
+        placeholder="Ex: 11999999999" 
+      />
     )}
     <InputGroup label="E-mail" value={entity.email} onChange={(e) => updateFn('email', e.target.value)} />
     
@@ -163,6 +168,7 @@ const App: React.FC = () => {
   const [waTemplate, setWaTemplate] = useState(DEFAULT_WA_TEMPLATE);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [tempWaNumber, setTempWaNumber] = useState('');
+  const [lastGeneratedPdfUrl, setLastGeneratedPdfUrl] = useState<string | null>(null);
   
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -233,17 +239,17 @@ const App: React.FC = () => {
     const { data: clients } = await supabase.from('clients').select('*').order('name');
     if (clients) {
       setSavedClients(clients.map(c => ({
-        name: c.name,
-        taxId: c.tax_id,
-        street: c.street,
-        number: c.number,
-        complement: c.complement,
-        neighborhood: c.neighborhood,
-        zipCode: c.zip_code,
-        city: c.city,
-        uf: c.uf,
-        email: c.email,
-        phone: c.phone,
+        name: c.name || '',
+        taxId: c.tax_id || '',
+        street: c.street || '',
+        number: c.number || '',
+        complement: c.complement || '',
+        neighborhood: c.neighborhood || '',
+        zipCode: c.zip_code || '',
+        city: c.city || '',
+        uf: c.uf || '',
+        email: c.email || '',
+        phone: c.phone || '',
         whatsapp: c.whatsapp || ''
       })));
     }
@@ -257,7 +263,8 @@ const App: React.FC = () => {
         timestamp: new Date(inv.created_at).getTime(),
         data: inv.full_data,
         totalValue: Number(inv.total_value),
-        clientName: inv.client_name
+        clientName: inv.client_name,
+        pdfUrl: inv.pdf_url
       })));
     }
   };
@@ -318,7 +325,7 @@ const App: React.FC = () => {
 
   const handleLogout = async () => { await supabase.auth.signOut(); setView('landing'); };
 
-  const saveToHistory = async () => {
+  const saveToHistory = async (pdfUrl: string | null = null) => {
     const subtotal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
     const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
     const total = subtotal - totalTaxes - data.discount;
@@ -327,9 +334,28 @@ const App: React.FC = () => {
       client_name: data.client.name,
       invoice_number: data.invoiceNumber,
       total_value: total,
-      full_data: data
+      full_data: data,
+      pdf_url: pdfUrl
     });
     loadHistory();
+  };
+
+  const uploadPdfToStorage = async (blob: Blob): Promise<string | null> => {
+    const fileName = `invoice_${data.invoiceNumber}_${Date.now()}.pdf`;
+    const { data: uploadData, error } = await supabase.storage
+      .from('invoices')
+      .upload(`${session.user.id}/${fileName}`, blob);
+
+    if (error) {
+      console.error('Erro no upload do PDF:', error);
+      return null;
+    }
+
+    const { data: publicUrlData } = supabase.storage
+      .from('invoices')
+      .getPublicUrl(`${session.user.id}/${fileName}`);
+
+    return publicUrlData.publicUrl;
   };
 
   const handlePrint = async () => {
@@ -347,9 +373,17 @@ const App: React.FC = () => {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      
+      // Salva localmente
       pdf.save(`NovaInvoice_${data.invoiceNumber}.pdf`);
-      await saveToHistory();
-      showToast('Documento PDF gerado com sucesso.', 'success');
+      
+      // Gera blob para upload
+      const pdfBlob = pdf.output('blob');
+      const publicUrl = await uploadPdfToStorage(pdfBlob);
+      setLastGeneratedPdfUrl(publicUrl);
+
+      await saveToHistory(publicUrl);
+      showToast('Documento PDF gerado e sincronizado na nuvem.', 'success');
     } catch (error) { 
         showToast("Erro crítico ao gerar PDF.", 'error'); 
     } finally { 
@@ -374,7 +408,8 @@ const App: React.FC = () => {
     let message = waTemplate
       .replace('{cliente}', data.client.name)
       .replace('{valor}', formatCurrency(total))
-      .replace('{numero}', data.invoiceNumber);
+      .replace('{numero}', data.invoiceNumber)
+      .replace('{link}', lastGeneratedPdfUrl || '(Link expirado ou não gerado)');
 
     const phone = tempWaNumber.replace(/\D/g, '');
     const url = `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
@@ -418,24 +453,34 @@ const App: React.FC = () => {
         showToast('Nome e Documento são obrigatórios para salvar.', 'error');
         return;
     }
-    await supabase.from('clients').upsert({
-      user_id: session.user.id,
-      name: entity.name,
-      tax_id: entity.taxId,
-      street: entity.street,
-      number: entity.number,
-      complement: entity.complement,
-      neighborhood: entity.neighborhood,
-      zip_code: entity.zipCode,
-      city: entity.city,
-      uf: entity.uf,
-      email: entity.email,
-      phone: entity.phone,
-      whatsapp: entity.whatsapp
-    }, { onConflict: 'user_id, tax_id' });
-    loadClients();
-    showToast('Cliente atualizado na base de dados.', 'success');
-    triggerButtonFeedback('save-client-btn');
+    
+    try {
+      // Sincroniza os dados com as colunas reais da tabela 'clients'
+      const { error } = await supabase.from('clients').upsert({
+        user_id: session.user.id,
+        name: entity.name,
+        tax_id: entity.taxId,
+        street: entity.street,
+        number: entity.number,
+        complement: entity.complement,
+        neighborhood: entity.neighborhood,
+        zip_code: entity.zipCode,
+        city: entity.city,
+        uf: entity.uf,
+        email: entity.email,
+        phone: entity.phone,
+        whatsapp: entity.whatsapp
+      }, { onConflict: 'user_id, tax_id' });
+
+      if (error) throw error;
+
+      loadClients();
+      showToast('Cliente atualizado na base de dados.', 'success');
+      triggerButtonFeedback('save-client-btn');
+    } catch (error: any) {
+      console.error('Erro ao salvar cliente:', error);
+      showToast(`Erro ao salvar: Verifique se rodou o SQL de ajuste da tabela no painel Supabase.`, 'error');
+    }
   };
 
   const triggerButtonFeedback = (id: string, successText: string = "CONCLUÍDO!") => {
@@ -455,6 +500,7 @@ const App: React.FC = () => {
       nextNum = String(isNaN(lastNum) ? 1 : lastNum + 1).padStart(3, '0');
     }
     setData(prev => ({ ...INITIAL_DATA, invoiceNumber: nextNum, provider: prev.provider, branding: prev.branding }));
+    setLastGeneratedPdfUrl(null);
     setView('editor');
     setActiveTab('edit');
   };
@@ -477,7 +523,6 @@ const App: React.FC = () => {
       <div className="min-h-screen bg-[#020617] flex flex-col md:flex-row p-6 md:p-12 relative overflow-hidden items-center justify-center gap-10 md:gap-20">
         <div className="absolute top-[-20%] left-[-10%] w-[70%] h-[70%] bg-blue-600/5 blur-[150px] rounded-full bg-orb pointer-events-none"></div>
         
-        {/* Toast Container for Login Screen */}
         <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">
           {toasts.map(toast => (
             <div key={toast.id} className={`pointer-events-auto flex items-center gap-4 px-6 py-4 rounded-2xl backdrop-blur-3xl border shadow-2xl animate-in slide-in-from-right-10 fade-in duration-300 ${
@@ -495,7 +540,6 @@ const App: React.FC = () => {
           ))}
         </div>
 
-        {/* Lado Esquerdo - Hero Content */}
         <div className="w-full max-w-2xl space-y-12 z-10 text-center md:text-left">
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-full">
             <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
@@ -526,7 +570,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Lado Direito - Card de Autenticação */}
         <div className="w-full max-w-md z-10">
           <div className="bg-[#0f172a]/80 backdrop-blur-3xl p-10 md:p-14 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
             <div className="absolute -top-10 -right-10 w-40 h-40 bg-blue-600/10 blur-3xl rounded-full"></div>
@@ -575,7 +618,6 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#020617] text-white relative overflow-x-hidden font-['Inter']">
       <div className="fixed top-[-10%] left-[-5%] w-[60%] h-[60%] bg-blue-600/5 blur-[120px] rounded-full pointer-events-none bg-orb"></div>
       
-      {/* Toast Container for App Area */}
       <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">
         {toasts.map(toast => (
           <div key={toast.id} className={`pointer-events-auto flex items-center gap-4 px-6 py-4 rounded-2xl backdrop-blur-3xl border shadow-2xl animate-in slide-in-from-right-10 fade-in duration-300 ${
@@ -593,7 +635,6 @@ const App: React.FC = () => {
         ))}
       </div>
 
-      {/* MODAL WHATSAPP SELECTOR (NOVO) */}
       {isWhatsAppModalOpen && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300">
            <div className="bg-[#0f172a] w-full max-w-md rounded-[2.5rem] border border-white/10 p-10 space-y-8 shadow-2xl">
@@ -611,6 +652,19 @@ const App: React.FC = () => {
                     Usar Telefone da Nota ({data.client.phone})
                   </button>
                 )}
+
+                <div className={`p-4 rounded-2xl border ${lastGeneratedPdfUrl ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20'}`}>
+                   <span className="text-[10px] font-black uppercase tracking-widest block mb-1">Status do Documento</span>
+                   <p className={`text-[11px] font-bold ${lastGeneratedPdfUrl ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      {lastGeneratedPdfUrl ? 'Link da nuvem pronto para envio.' : 'Link ausente. Gere o PDF primeiro.'}
+                   </p>
+                   {lastGeneratedPdfUrl && (
+                     <a href={lastGeneratedPdfUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-[9px] font-black text-white bg-white/10 px-4 py-2 rounded-lg border border-white/10 hover:bg-white/20 transition-all uppercase tracking-widest">
+                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                       Visualizar Arquivo
+                     </a>
+                   )}
+                </div>
               </div>
 
               <div className="flex gap-4 pt-4">
@@ -660,9 +714,7 @@ const App: React.FC = () => {
               </div>
             </header>
 
-            {/* DASHBOARD APRIMORADO */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-               {/* Card Limite MEI */}
                <div className="lg:col-span-2 bg-[#0f172a]/60 backdrop-blur-3xl p-10 rounded-[3rem] border border-white/10 shadow-2xl relative overflow-hidden group">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/5 blur-3xl rounded-full translate-x-1/2 -translate-y-1/2"></div>
                   <div className="flex justify-between items-start mb-10">
@@ -702,7 +754,6 @@ const App: React.FC = () => {
                   </div>
                </div>
 
-               {/* Card Resumo Rápido */}
                <div className="bg-[#0f172a]/40 backdrop-blur-2xl p-10 rounded-[3rem] border border-white/10 flex flex-col justify-between group hover:border-blue-500/30 transition-all">
                   <div>
                     <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center mb-6 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-all">
@@ -720,7 +771,6 @@ const App: React.FC = () => {
                </div>
             </div>
 
-            {/* LISTA DE REGISTROS */}
             <div className="space-y-6">
               <div className="flex items-center justify-between mb-8 px-4">
                  <h3 className="text-[11px] font-black text-slate-500 uppercase tracking-[0.3em]">Emissões Recentes</h3>
@@ -749,7 +799,7 @@ const App: React.FC = () => {
                       <span className="font-black text-2xl text-white tracking-tighter block">{formatCurrency(item.totalValue)}</span>
                       <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Líquido Recebido</span>
                     </div>
-                    <button onClick={() => { setData(item.data); setView('editor'); }} className="px-8 py-5 bg-white/5 text-blue-400 border border-white/10 rounded-2xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all font-black text-[10px] uppercase tracking-widest active:scale-95">Abrir</button>
+                    <button onClick={() => { setData(item.data); setLastGeneratedPdfUrl(item.pdfUrl || null); setView('editor'); }} className="px-8 py-5 bg-white/5 text-blue-400 border border-white/10 rounded-2xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all font-black text-[10px] uppercase tracking-widest active:scale-95">Abrir</button>
                   </div>
                 </div>
               ))}
@@ -771,13 +821,8 @@ const App: React.FC = () => {
                   </button>
                 </div>
               </div>
-              <div className="flex gap-2">
-                 <button onClick={() => setView('history')} className="flex-1 py-3 text-[10px] font-black uppercase tracking-widest bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-600/20 hover:scale-[1.02] transition-all">Ir ao Dashboard</button>
-                 <button onClick={() => setView('landing')} className="px-6 py-3 text-[10px] font-black uppercase tracking-widest bg-white/5 border border-white/10 text-slate-500 rounded-xl hover:bg-white/10 transition-all">Cancelar</button>
-              </div>
             </header>
 
-            {/* SEÇÃO IDENTIDADE VISUAL */}
             <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-8 relative">
               <div className="flex justify-between items-center">
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">IDENTIDADE VISUAL</h3>
@@ -839,15 +884,14 @@ const App: React.FC = () => {
 
             <EntityForm title="Tomador (Cliente)" entity={data.client} updateFn={updateClient} isClient onSearch={() => setIsModalOpen(true)} onSave={handleSaveClient} saveButtonId="save-client-btn" />
 
-            {/* SEÇÃO COMUNICAÇÃO (NOVO) */}
             <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-6">
               <div className="flex justify-between items-center">
                 <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Configurações de Mensagem</h3>
                 <span className="text-[9px] px-2 py-1 bg-white/5 rounded-lg text-slate-600 font-bold uppercase">Template Global</span>
               </div>
-              <InputGroup label="Template da Mensagem" isTextArea value={waTemplate} onChange={(e) => setWaTemplate(e.target.value)} placeholder="Dica: use {cliente}, {valor} e {numero} para preenchimento automático." />
-              <div className="grid grid-cols-3 gap-2">
-                {['{cliente}', '{valor}', '{numero}'].map(tag => (
+              <InputGroup label="Template da Mensagem" isTextArea value={waTemplate} onChange={(e) => setWaTemplate(e.target.value)} placeholder="Dica: use {cliente}, {valor}, {numero} e {link} para preenchimento automático." />
+              <div className="grid grid-cols-4 gap-2">
+                {['{cliente}', '{valor}', '{numero}', '{link}'].map(tag => (
                   <button key={tag} onClick={() => setWaTemplate(prev => prev + ' ' + tag)} className="text-[9px] font-black text-slate-500 p-2 bg-white/5 rounded-xl hover:bg-white/10 transition-all">{tag}</button>
                 ))}
               </div>
