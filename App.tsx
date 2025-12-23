@@ -20,6 +20,8 @@ const INITIAL_LABELS: InvoiceLabels = {
   totalLabel: 'Valor Líquido do Documento',
 };
 
+const DEFAULT_WA_TEMPLATE = "Olá {cliente}! Segue o seu documento de faturamento #{numero} no valor de {valor}. Qualquer dúvida estou à disposição!";
+
 const INITIAL_BRANDING: Branding = {
   primaryColor: '#006494',
   secondaryColor: '#00A6FB',
@@ -40,6 +42,7 @@ const EMPTY_ENTITY: Entity = {
   uf: '',
   email: '',
   phone: '',
+  whatsapp: '',
 };
 
 const INITIAL_PROVIDER: Entity = {
@@ -104,8 +107,11 @@ const EntityForm: React.FC<EntityFormProps> = ({
     <InputGroup label="Nome / Razão Social" value={entity.name} onChange={(e) => updateFn('name', e.target.value)} />
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
       <InputGroup label="CPF / CNPJ" value={entity.taxId} onChange={(e) => updateFn('taxId', e.target.value)} />
-      <InputGroup label="Telefone" value={entity.phone} onChange={(e) => updateFn('phone', e.target.value)} />
+      <InputGroup label="Telefone Fixo / Comercial" value={entity.phone} onChange={(e) => updateFn('phone', e.target.value)} />
     </div>
+    {isClient && (
+      <InputGroup label="WhatsApp de Cobrança (Celular)" value={entity.whatsapp || ''} onChange={(e) => updateFn('whatsapp', e.target.value)} placeholder="Ex: 11999999999" />
+    )}
     <InputGroup label="E-mail" value={entity.email} onChange={(e) => updateFn('email', e.target.value)} />
     
     <div className="pt-6 border-t border-white/5 space-y-5">
@@ -154,6 +160,9 @@ const App: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEmitting, setIsEmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<'edit' | 'preview'>('edit');
+  const [waTemplate, setWaTemplate] = useState(DEFAULT_WA_TEMPLATE);
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+  const [tempWaNumber, setTempWaNumber] = useState('');
   
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
@@ -191,6 +200,7 @@ const App: React.FC = () => {
   const loadProfile = async () => {
     const { data: profile } = await supabase.from('profiles').select('*').single();
     if (profile) {
+      if (profile.whatsapp_template) setWaTemplate(profile.whatsapp_template);
       setData(prev => ({
         ...prev,
         provider: {
@@ -233,7 +243,8 @@ const App: React.FC = () => {
         city: c.city,
         uf: c.uf,
         email: c.email,
-        phone: c.phone
+        phone: c.phone,
+        whatsapp: c.whatsapp || ''
       })));
     }
   };
@@ -346,6 +357,31 @@ const App: React.FC = () => {
     }
   };
 
+  const handleOpenWhatsAppModal = () => {
+    setTempWaNumber(data.client.whatsapp || data.client.phone || '');
+    setIsWhatsAppModalOpen(true);
+  };
+
+  const executeWhatsAppShare = () => {
+    if (!tempWaNumber) {
+      showToast('Informe um número de WhatsApp válido.', 'error');
+      return;
+    }
+    const subtotal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
+    const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
+    const total = subtotal - totalTaxes - data.discount;
+
+    let message = waTemplate
+      .replace('{cliente}', data.client.name)
+      .replace('{valor}', formatCurrency(total))
+      .replace('{numero}', data.invoiceNumber);
+
+    const phone = tempWaNumber.replace(/\D/g, '');
+    const url = `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
+    window.open(url, '_blank');
+    setIsWhatsAppModalOpen(false);
+  };
+
   const saveGlobalSettings = async () => {
     const { error } = await supabase.from('profiles').upsert({
       id: session.user.id,
@@ -366,6 +402,7 @@ const App: React.FC = () => {
       logo_letter: data.branding.logoLetter,
       logo_base64: data.branding.logoImage,
       template: data.branding.template,
+      whatsapp_template: waTemplate,
       updated_at: new Date().toISOString()
     });
     if (error) showToast('Erro ao sincronizar configurações.', 'error');
@@ -393,7 +430,8 @@ const App: React.FC = () => {
       city: entity.city,
       uf: entity.uf,
       email: entity.email,
-      phone: entity.phone
+      phone: entity.phone,
+      whatsapp: entity.whatsapp
     }, { onConflict: 'user_id, tax_id' });
     loadClients();
     showToast('Cliente atualizado na base de dados.', 'success');
@@ -554,6 +592,34 @@ const App: React.FC = () => {
           </div>
         ))}
       </div>
+
+      {/* MODAL WHATSAPP SELECTOR (NOVO) */}
+      {isWhatsAppModalOpen && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xl animate-in fade-in duration-300">
+           <div className="bg-[#0f172a] w-full max-w-md rounded-[2.5rem] border border-white/10 p-10 space-y-8 shadow-2xl">
+              <header className="space-y-2">
+                <h2 className="text-2xl font-black text-white tracking-tight">Enviar via WhatsApp</h2>
+                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.2em]">Selecione ou edite o número de destino</p>
+              </header>
+              
+              <div className="space-y-6">
+                <InputGroup label="Número de WhatsApp" value={tempWaNumber} onChange={(e) => setTempWaNumber(e.target.value)} placeholder="Ex: 11999999999" />
+                
+                {data.client.phone && data.client.phone !== tempWaNumber && (
+                  <button onClick={() => setTempWaNumber(data.client.phone)} className="text-[9px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 transition-colors flex items-center gap-2">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                    Usar Telefone da Nota ({data.client.phone})
+                  </button>
+                )}
+              </div>
+
+              <div className="flex gap-4 pt-4">
+                 <button onClick={() => setIsWhatsAppModalOpen(false)} className="flex-1 py-4 bg-white/5 border border-white/10 text-slate-500 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-white/10 transition-all">Cancelar</button>
+                 <button onClick={executeWhatsAppShare} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-emerald-600/20 hover:scale-105 transition-all">Abrir WhatsApp</button>
+              </div>
+           </div>
+        </div>
+      )}
 
       <ClientSearchModal 
         isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} clients={savedClients} 
@@ -773,6 +839,20 @@ const App: React.FC = () => {
 
             <EntityForm title="Tomador (Cliente)" entity={data.client} updateFn={updateClient} isClient onSearch={() => setIsModalOpen(true)} onSave={handleSaveClient} saveButtonId="save-client-btn" />
 
+            {/* SEÇÃO COMUNICAÇÃO (NOVO) */}
+            <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-6">
+              <div className="flex justify-between items-center">
+                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Configurações de Mensagem</h3>
+                <span className="text-[9px] px-2 py-1 bg-white/5 rounded-lg text-slate-600 font-bold uppercase">Template Global</span>
+              </div>
+              <InputGroup label="Template da Mensagem" isTextArea value={waTemplate} onChange={(e) => setWaTemplate(e.target.value)} placeholder="Dica: use {cliente}, {valor} e {numero} para preenchimento automático." />
+              <div className="grid grid-cols-3 gap-2">
+                {['{cliente}', '{valor}', '{numero}'].map(tag => (
+                  <button key={tag} onClick={() => setWaTemplate(prev => prev + ' ' + tag)} className="text-[9px] font-black text-slate-500 p-2 bg-white/5 rounded-xl hover:bg-white/10 transition-all">{tag}</button>
+                ))}
+              </div>
+            </section>
+
             <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-6">
               <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Itens</h3><button onClick={() => setData(prev => ({ ...prev, items: [...prev.items, { id: Math.random().toString(36).substr(2, 9), description: '', quantity: 1, unitValue: 0 }] }))} className="text-[10px] font-black text-blue-400 bg-blue-400/10 px-4 py-2 rounded-full">Add</button></div>
               {data.items.map(item => (
@@ -798,10 +878,15 @@ const App: React.FC = () => {
               <InputGroup label="Notas Adicionais" isTextArea value={data.notes} onChange={(e) => setData({...data, notes: e.target.value})} />
             </section>
 
-            <div className="bg-[#020617]/95 pt-8 pb-12 sticky bottom-0 z-20 border-t border-white/10">
-              <button disabled={isEmitting} onClick={handlePrint} className={`w-full py-6 text-white rounded-[2.5rem] font-black text-xs uppercase tracking-[0.3em] transition-all ${isEmitting ? 'opacity-50' : 'bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-600/20'}`}>
-                {isEmitting ? 'Sincronizando...' : 'Gerar & Sincronizar PDF'}
-              </button>
+            <div className="bg-[#020617]/95 pt-8 pb-12 sticky bottom-0 z-20 border-t border-white/10 flex flex-col gap-4">
+              <div className="grid grid-cols-12 gap-3">
+                <button disabled={isEmitting} onClick={handlePrint} className={`col-span-8 py-6 text-white rounded-[2.5rem] font-black text-xs uppercase tracking-[0.3em] transition-all ${isEmitting ? 'opacity-50' : 'bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-600/20'}`}>
+                  {isEmitting ? 'Sincronizando...' : 'Gerar PDF'}
+                </button>
+                <button onClick={handleOpenWhatsAppModal} className="col-span-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-[2.5rem] flex items-center justify-center shadow-xl shadow-emerald-600/20 transition-all active:scale-95" title="Enviar WhatsApp">
+                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                </button>
+              </div>
             </div>
           </div>
 

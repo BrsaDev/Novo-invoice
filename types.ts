@@ -14,6 +14,7 @@ export interface Entity {
   uf: string;
   email: string;
   phone: string;
+  whatsapp?: string;
   pixKey?: string;
 }
 

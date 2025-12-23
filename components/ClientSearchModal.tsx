@@ -67,6 +67,12 @@ export const ClientSearchModal: React.FC<ClientSearchModalProps> = ({
                     <h4 className="font-black text-white text-base leading-tight uppercase tracking-tight">{client.name}</h4>
                     <p className="text-xs text-slate-500 font-bold tracking-widest">{client.taxId}</p>
                     <p className="text-[10px] text-slate-600 font-medium uppercase mt-2">{client.city} • {client.uf}</p>
+                    {client.whatsapp && (
+                      <div className="flex items-center gap-1.5 mt-2">
+                        <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>
+                        <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest">WhatsApp Salvo</span>
+                      </div>
+                    )}
                   </div>
                   <div className="opacity-0 group-hover:opacity-100 transition-all translate-x-4 group-hover:translate-x-0">
                     <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest bg-blue-400/10 px-3 py-1.5 rounded-lg border border-blue-400/20">Selecionar</span>
