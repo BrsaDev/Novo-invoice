@@ -4,6 +4,7 @@ import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHisto
 import { InputGroup } from './components/InputGroup';
 import { InvoicePreview } from './components/InvoicePreview';
 import { ClientSearchModal } from './components/ClientSearchModal';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { formatCurrency } from './utils/formatters';
 import { supabase } from './lib/supabase';
 
@@ -70,6 +71,38 @@ const INITIAL_DATA: InvoiceData = {
   branding: INITIAL_BRANDING,
 };
 
+const sanitizeFilename = (str: string) => {
+  return str
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '_')
+    .replace(/_+/g, '_')
+    .trim();
+};
+
+const shortenUrl = async (longUrl: string): Promise<string> => {
+  try {
+    const response = await fetch('https://spoo.me/', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'application/json',
+      },
+      body: `url=${encodeURIComponent(longUrl)}`,
+    });
+
+    if (response.ok) {
+      const result = await response.json();
+      return result.short_url || longUrl;
+    }
+    return longUrl; 
+  } catch (error) {
+    console.error('Erro ao encurtar URL (CORS/Network):', error);
+    return longUrl;
+  }
+};
+
 interface EntityFormProps {
   title: string;
   entity: Entity;
@@ -95,7 +128,7 @@ const EntityForm: React.FC<EntityFormProps> = ({
       {isClient && (
         <div className="flex gap-2">
           <button onClick={onSearch} className="text-[9px] md:text-[10px] font-black text-blue-400 px-3 py-1.5 bg-blue-400/10 rounded-lg uppercase tracking-widest hover:bg-blue-400 hover:text-white transition-all flex items-center gap-1 border border-blue-400/20">
-            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" x2="16.65" y2="16.65"></line></svg>
             Buscar
           </button>
           <button id={saveButtonId} onClick={onSave} className="text-[9px] md:text-[10px] font-black text-indigo-400 px-3 py-1.5 bg-indigo-400/10 rounded-lg uppercase tracking-widest hover:bg-indigo-400 hover:text-white transition-all border border-indigo-400/20 min-w-[60px]">
@@ -160,6 +193,7 @@ const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
   const [view, setView] = useState<ViewState>('landing');
   const [data, setData] = useState<InvoiceData>(INITIAL_DATA);
+  const [currentInvoiceId, setCurrentInvoiceId] = useState<string | null>(null);
   const [savedClients, setSavedClients] = useState<Entity[]>([]);
   const [history, setHistory] = useState<InvoiceHistoryItem[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -177,6 +211,20 @@ const App: React.FC = () => {
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
 
   const [toasts, setToasts] = useState<Toast[]>([]);
+
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    type?: 'danger' | 'info' | 'warning';
+    onConfirm: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const invoiceRef = useRef<HTMLDivElement>(null);
@@ -261,7 +309,10 @@ const App: React.FC = () => {
       setHistory(invoices.map(inv => ({
         id: inv.id,
         timestamp: new Date(inv.created_at).getTime(),
-        data: inv.full_data,
+        data: {
+          ...inv.full_data,
+          pdfUrl: inv.pdf_url // Garante que o estado carregado tenha a URL mais recente do banco
+        },
         totalValue: Number(inv.total_value),
         clientName: inv.client_name,
         pdfUrl: inv.pdf_url
@@ -273,20 +324,17 @@ const App: React.FC = () => {
     const now = new Date();
     const currentYear = now.getFullYear();
     const currentMonth = now.getMonth();
-
     const yearItems = history.filter(h => new Date(h.timestamp).getFullYear() === currentYear);
     const monthItems = history.filter(h => {
       const d = new Date(h.timestamp);
       return d.getFullYear() === currentYear && d.getMonth() === currentMonth;
     });
-
     const totalAnnual = yearItems.reduce((acc, curr) => acc + curr.totalValue, 0);
     const totalMonthly = monthItems.reduce((acc, curr) => acc + curr.totalValue, 0);
     const avgTicket = yearItems.length > 0 ? totalAnnual / yearItems.length : 0;
     const meiLimit = 81000;
     const remainingMei = Math.max(0, meiLimit - totalAnnual);
     const progress = Math.min(100, (totalAnnual / meiLimit) * 100);
-
     return { totalAnnual, totalMonthly, avgTicket, remainingMei, progress, yearItemsCount: yearItems.length, monthItemsCount: monthItems.length };
   }, [history]);
 
@@ -325,40 +373,49 @@ const App: React.FC = () => {
 
   const handleLogout = async () => { await supabase.auth.signOut(); setView('landing'); };
 
-  const saveToHistory = async (pdfUrl: string | null = null) => {
+  const saveToHistory = async (pdfUrl: string | null = null, forceId: string | null = null, updatedData?: InvoiceData) => {
     const subtotal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
     const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
     const total = subtotal - totalTaxes - data.discount;
-    await supabase.from('invoices').insert({
+    const targetId = forceId || currentInvoiceId;
+    
+    // O full_data agora recebe a versão encurtada da URL para consistência interna
+    const payload = {
       user_id: session.user.id,
       client_name: data.client.name,
       invoice_number: data.invoiceNumber,
       total_value: total,
-      full_data: data,
+      full_data: updatedData || { ...data, pdfUrl: pdfUrl }, 
       pdf_url: pdfUrl
-    });
+    };
+
+    if (targetId) {
+      const { error } = await supabase.from('invoices').update(payload).eq('id', targetId);
+      if (error) console.error('Erro ao atualizar histórico:', error);
+    } else {
+      const { error } = await supabase.from('invoices').insert(payload);
+      if (error) console.error('Erro ao inserir histórico:', error);
+    }
     loadHistory();
   };
 
   const uploadPdfToStorage = async (blob: Blob): Promise<string | null> => {
-    const fileName = `invoice_${data.invoiceNumber}_${Date.now()}.pdf`;
+    const sanitizedClient = data.client.name ? sanitizeFilename(data.client.name).slice(0, 25) : 'cliente';
+    const fileName = `fatura_${data.invoiceNumber}_${sanitizedClient}_${Date.now().toString().slice(-4)}.pdf`;
     const { data: uploadData, error } = await supabase.storage
       .from('invoices')
-      .upload(`${session.user.id}/${fileName}`, blob);
-
+      .upload(`${session.user.id}/${fileName}`, blob, { upsert: true });
     if (error) {
       console.error('Erro no upload do PDF:', error);
       return null;
     }
-
     const { data: publicUrlData } = supabase.storage
       .from('invoices')
       .getPublicUrl(`${session.user.id}/${fileName}`);
-
     return publicUrlData.publicUrl;
   };
 
-  const handlePrint = async () => {
+  const proceedWithPdfGeneration = async (targetId: string | null) => {
     if (!invoiceRef.current) return;
     setActiveTab('preview');
     setIsEmitting(true);
@@ -374,20 +431,67 @@ const App: React.FC = () => {
       const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       
-      // Salva localmente
-      pdf.save(`NovaInvoice_${data.invoiceNumber}.pdf`);
+      const sanitizedClient = data.client.name ? sanitizeFilename(data.client.name).slice(0, 25) : 'cliente';
+      pdf.save(`Fatura_${data.invoiceNumber}_${sanitizedClient}.pdf`);
       
-      // Gera blob para upload
       const pdfBlob = pdf.output('blob');
       const publicUrl = await uploadPdfToStorage(pdfBlob);
-      setLastGeneratedPdfUrl(publicUrl);
+      let finalUrl = publicUrl;
+      if (publicUrl) finalUrl = await shortenUrl(publicUrl);
+      
+      // Sincroniza o estado local IMEDIATAMENTE com a URL encurtada
+      const updatedData = { ...data, pdfUrl: finalUrl || undefined };
+      setData(updatedData);
+      setLastGeneratedPdfUrl(finalUrl);
 
-      await saveToHistory(publicUrl);
-      showToast('Documento PDF gerado e sincronizado na nuvem.', 'success');
+      // Salva no banco passando os dados já atualizados com a URL curta
+      await saveToHistory(finalUrl, targetId, updatedData);
+      showToast('Documento processado e salvo no histórico.', 'success');
     } catch (error) { 
         showToast("Erro crítico ao gerar PDF.", 'error'); 
     } finally { 
         setIsEmitting(false); 
+    }
+  };
+
+  const handlePrint = async () => {
+    if (!invoiceRef.current) return;
+
+    if (!currentInvoiceId) {
+      const { data: existing } = await supabase.from('invoices')
+        .select('id')
+        .eq('user_id', session.user.id)
+        .eq('invoice_number', data.invoiceNumber)
+        .maybeSingle();
+
+      if (existing) {
+        setConfirmDialog({
+          isOpen: true,
+          title: "Documento Existente",
+          message: `O documento #${data.invoiceNumber} já existe no seu histórico. Deseja substituir o registro existente ou cancelar para alterar o número manualmente?`,
+          type: 'warning',
+          confirmText: "Substituir Registro",
+          onConfirm: () => {
+            setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+            setCurrentInvoiceId(existing.id);
+            proceedWithPdfGeneration(existing.id);
+          }
+        });
+        return;
+      }
+      proceedWithPdfGeneration(null);
+    } else {
+      setConfirmDialog({
+        isOpen: true,
+        title: "Atualizar Registro",
+        message: `Você está editando o documento #${data.invoiceNumber}. O registro atual no histórico será atualizado com esta nova versão do PDF encurtado.`,
+        type: 'info',
+        confirmText: "Atualizar Agora",
+        onConfirm: () => {
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+          proceedWithPdfGeneration(currentInvoiceId);
+        }
+      });
     }
   };
 
@@ -404,13 +508,11 @@ const App: React.FC = () => {
     const subtotal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
     const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
     const total = subtotal - totalTaxes - data.discount;
-
     let message = waTemplate
       .replace('{cliente}', data.client.name)
       .replace('{valor}', formatCurrency(total))
       .replace('{numero}', data.invoiceNumber)
       .replace('{link}', lastGeneratedPdfUrl || '(Link expirado ou não gerado)');
-
     const phone = tempWaNumber.replace(/\D/g, '');
     const url = `https://api.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(message)}`;
     window.open(url, '_blank');
@@ -453,9 +555,7 @@ const App: React.FC = () => {
         showToast('Nome e Documento são obrigatórios para salvar.', 'error');
         return;
     }
-    
     try {
-      // Sincroniza os dados com as colunas reais da tabela 'clients'
       const { error } = await supabase.from('clients').upsert({
         user_id: session.user.id,
         name: entity.name,
@@ -464,22 +564,20 @@ const App: React.FC = () => {
         number: entity.number,
         complement: entity.complement,
         neighborhood: entity.neighborhood,
-        zip_code: entity.zipCode,
+        zip_code: entity.zip_code,
         city: entity.city,
         uf: entity.uf,
         email: entity.email,
         phone: entity.phone,
         whatsapp: entity.whatsapp
       }, { onConflict: 'user_id, tax_id' });
-
       if (error) throw error;
-
       loadClients();
       showToast('Cliente atualizado na base de dados.', 'success');
       triggerButtonFeedback('save-client-btn');
     } catch (error: any) {
       console.error('Erro ao salvar cliente:', error);
-      showToast(`Erro ao salvar: Verifique se rodou o SQL de ajuste da tabela no painel Supabase.`, 'error');
+      showToast(`Erro ao salvar cliente.`, 'error');
     }
   };
 
@@ -501,6 +599,7 @@ const App: React.FC = () => {
     }
     setData(prev => ({ ...INITIAL_DATA, invoiceNumber: nextNum, provider: prev.provider, branding: prev.branding }));
     setLastGeneratedPdfUrl(null);
+    setCurrentInvoiceId(null);
     setView('editor');
     setActiveTab('edit');
   };
@@ -530,11 +629,7 @@ const App: React.FC = () => {
               toast.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' :
               'bg-blue-500/10 border-blue-500/20 text-blue-400'
             }`}>
-              <div className={`w-2 h-2 rounded-full ${
-                toast.type === 'success' ? 'bg-emerald-500' :
-                toast.type === 'error' ? 'bg-rose-500' :
-                'bg-blue-500'
-              }`}></div>
+              <div className={`w-2 h-2 rounded-full ${toast.type === 'success' ? 'bg-emerald-500' : toast.type === 'error' ? 'bg-rose-500' : 'bg-blue-500'}`}></div>
               <span className="text-[11px] font-black uppercase tracking-widest">{toast.message}</span>
             </div>
           ))}
@@ -543,47 +638,27 @@ const App: React.FC = () => {
         <div className="w-full max-w-2xl space-y-12 z-10 text-center md:text-left">
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-full">
             <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nova Invoice V3.1</span>
+            <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nova Invoice V3.2</span>
           </div>
-          
-          <h1 className="text-6xl md:text-8xl font-black text-white tracking-tighter leading-[0.9]">
-            Faturamento inteligente e <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600">minimalista.</span>
-          </h1>
-          
-          <p className="text-slate-400 text-lg md:text-xl font-medium max-w-lg">
-            Gere notas fiscais premium e controle seu teto MEI em uma interface projetada para a máxima performance visual.
-          </p>
-          
+          <h1 className="text-6xl md:text-8xl font-black text-white tracking-tighter leading-[0.9]">Faturamento inteligente e <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600">minimalista.</span></h1>
+          <p className="text-slate-400 text-lg md:text-xl font-medium max-w-lg">Gere notas fiscais premium e controle seu teto MEI em uma interface projetada para a máxima performance visual.</p>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-10 pt-10">
-            <div>
-              <p className="text-3xl font-black text-white tracking-tight">R$ 81k</p>
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1">Limite MEI</p>
-            </div>
-            <div>
-              <p className="text-3xl font-black text-white tracking-tight">Cloud</p>
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1">Base de Clientes</p>
-            </div>
-            <div>
-              <p className="text-3xl font-black text-white tracking-tight">PDF</p>
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1">Emissão Instantânea</p>
-            </div>
+            <div><p className="text-3xl font-black text-white tracking-tight">R$ 81k</p><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1">Limite MEI</p></div>
+            <div><p className="text-3xl font-black text-white tracking-tight">Cloud</p><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1">Base de Clientes</p></div>
+            <div><p className="text-3xl font-black text-white tracking-tight">PDF</p><p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mt-1">Emissão Instantânea</p></div>
           </div>
         </div>
 
         <div className="w-full max-w-md z-10">
           <div className="bg-[#0f172a]/80 backdrop-blur-3xl p-10 md:p-14 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
             <div className="absolute -top-10 -right-10 w-40 h-40 bg-blue-600/10 blur-3xl rounded-full"></div>
-            
             <div className="text-center mb-12">
               <div className="w-20 h-20 bg-blue-600 rounded-[2rem] mx-auto mb-8 flex items-center justify-center shadow-xl shadow-blue-600/30">
                 <span className="text-white text-4xl font-black">N</span>
               </div>
-              <h3 className="text-3xl font-black text-white tracking-tight">
-                {authMode === 'login' ? 'Bem-vindo de volta' : 'Portal do Prestador'}
-              </h3>
-              <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mt-3">Portal do Prestador</p>
+              <h3 className="text-3xl font-black text-white tracking-tight">{authMode === 'login' ? 'Bem-vindo de volta' : 'Portal do Prestador'}</h3>
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-[0.3em] mt-3">Acesso de Segurança</p>
             </div>
-
             <form onSubmit={handleAuth} className="space-y-8">
               {authMode === 'signup' && (
                 <div className="space-y-3">
@@ -599,12 +674,10 @@ const App: React.FC = () => {
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Senha de Segurança</label>
                 <input type="password" required value={loginPass} onChange={(e) => setLoginPass(e.target.value)} className="w-full px-7 py-5 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all" placeholder="••••••••••••" />
               </div>
-              
               <button disabled={isLoggingIn} type="submit" className="w-full py-6 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-600/20 active:scale-95">
                 {isLoggingIn ? 'Autenticando...' : (authMode === 'login' ? 'Entrar no Sistema' : 'Cadastrar Perfil')}
               </button>
             </form>
-
             <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="w-full mt-10 text-[10px] text-slate-500 font-black uppercase tracking-widest hover:text-blue-400 transition-colors">
               {authMode === 'login' ? 'Não possui conta? Cadastre-se' : 'Já possui conta? Faça Login'}
             </button>
@@ -618,6 +691,16 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#020617] text-white relative overflow-x-hidden font-['Inter']">
       <div className="fixed top-[-10%] left-[-5%] w-[60%] h-[60%] bg-blue-600/5 blur-[120px] rounded-full pointer-events-none bg-orb"></div>
       
+      <ConfirmDialog 
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        type={confirmDialog.type}
+        confirmText={confirmDialog.confirmText}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+      />
+
       <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4 pointer-events-none">
         {toasts.map(toast => (
           <div key={toast.id} className={`pointer-events-auto flex items-center gap-4 px-6 py-4 rounded-2xl backdrop-blur-3xl border shadow-2xl animate-in slide-in-from-right-10 fade-in duration-300 ${
@@ -625,11 +708,7 @@ const App: React.FC = () => {
             toast.type === 'error' ? 'bg-rose-500/10 border-rose-500/20 text-rose-400' :
             'bg-blue-500/10 border-blue-500/20 text-blue-400'
           }`}>
-            <div className={`w-2 h-2 rounded-full ${
-              toast.type === 'success' ? 'bg-emerald-500' :
-              toast.type === 'error' ? 'bg-rose-500' :
-              'bg-blue-500'
-            }`}></div>
+            <div className={`w-2 h-2 rounded-full ${toast.type === 'success' ? 'bg-emerald-500' : toast.type === 'error' ? 'bg-rose-500' : 'bg-blue-500'}`}></div>
             <span className="text-[11px] font-black uppercase tracking-widest">{toast.message}</span>
           </div>
         ))}
@@ -642,31 +721,30 @@ const App: React.FC = () => {
                 <h2 className="text-2xl font-black text-white tracking-tight">Enviar via WhatsApp</h2>
                 <p className="text-[10px] text-slate-500 font-bold uppercase tracking-[0.2em]">Selecione ou edite o número de destino</p>
               </header>
-              
               <div className="space-y-6">
                 <InputGroup label="Número de WhatsApp" value={tempWaNumber} onChange={(e) => setTempWaNumber(e.target.value)} placeholder="Ex: 11999999999" />
-                
                 {data.client.phone && data.client.phone !== tempWaNumber && (
                   <button onClick={() => setTempWaNumber(data.client.phone)} className="text-[9px] font-black text-blue-400 uppercase tracking-widest hover:text-blue-300 transition-colors flex items-center gap-2">
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
                     Usar Telefone da Nota ({data.client.phone})
                   </button>
                 )}
-
                 <div className={`p-4 rounded-2xl border ${lastGeneratedPdfUrl ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20'}`}>
                    <span className="text-[10px] font-black uppercase tracking-widest block mb-1">Status do Documento</span>
                    <p className={`text-[11px] font-bold ${lastGeneratedPdfUrl ? 'text-emerald-400' : 'text-rose-400'}`}>
-                      {lastGeneratedPdfUrl ? 'Link da nuvem pronto para envio.' : 'Link ausente. Gere o PDF primeiro.'}
+                      {lastGeneratedPdfUrl ? 'Link encurtado pronto para envio.' : 'Link ausente. Gere o PDF primeiro.'}
                    </p>
                    {lastGeneratedPdfUrl && (
-                     <a href={lastGeneratedPdfUrl} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-2 text-[9px] font-black text-white bg-white/10 px-4 py-2 rounded-lg border border-white/10 hover:bg-white/20 transition-all uppercase tracking-widest">
-                       <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
-                       Visualizar Arquivo
-                     </a>
+                     <div className="mt-3 flex flex-col gap-2">
+                        <span className="text-[9px] text-slate-500 font-mono break-all bg-black/20 p-2 rounded-lg">{lastGeneratedPdfUrl}</span>
+                        <a href={lastGeneratedPdfUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 text-[9px] font-black text-white bg-white/10 px-4 py-2 rounded-lg border border-white/10 hover:bg-white/20 transition-all uppercase tracking-widest w-fit">
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                          Visualizar Arquivo
+                        </a>
+                     </div>
                    )}
                 </div>
               </div>
-
               <div className="flex gap-4 pt-4">
                  <button onClick={() => setIsWhatsAppModalOpen(false)} className="flex-1 py-4 bg-white/5 border border-white/10 text-slate-500 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-white/10 transition-all">Cancelar</button>
                  <button onClick={executeWhatsAppShare} className="flex-1 py-4 bg-emerald-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-emerald-600/20 hover:scale-105 transition-all">Abrir WhatsApp</button>
@@ -709,97 +787,53 @@ const App: React.FC = () => {
                 </button>
                 <h1 className="text-4xl md:text-6xl font-black text-white tracking-tighter">Faturamento <span className="text-slate-500">Cloud</span></h1>
               </div>
-              <div className="flex gap-4">
-                 <button onClick={handleNewDocument} className="px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-blue-600/20 hover:scale-105 transition-all">Nova Emissão</button>
-              </div>
+              <div className="flex gap-4"><button onClick={handleNewDocument} className="px-6 py-4 bg-blue-600 text-white rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl shadow-blue-600/20 hover:scale-105 transition-all">Nova Emissão</button></div>
             </header>
-
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                <div className="lg:col-span-2 bg-[#0f172a]/60 backdrop-blur-3xl p-10 rounded-[3rem] border border-white/10 shadow-2xl relative overflow-hidden group">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-blue-600/5 blur-3xl rounded-full translate-x-1/2 -translate-y-1/2"></div>
                   <div className="flex justify-between items-start mb-10">
-                    <div>
-                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Teto Anual MEI</h4>
-                      <p className="text-5xl font-black text-white tracking-tighter">R$ 81.000,00</p>
-                    </div>
-                    <div className="text-right">
-                      <h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Utilizado</h4>
-                      <p className="text-2xl font-black text-blue-400 tracking-tight">{Math.round(dashboardMetrics.progress)}%</p>
-                    </div>
+                    <div><h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Teto Anual MEI</h4><p className="text-5xl font-black text-white tracking-tighter">R$ 81.000,00</p></div>
+                    <div className="text-right"><h4 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">Utilizado</h4><p className="text-2xl font-black text-blue-400 tracking-tight">{Math.round(dashboardMetrics.progress)}%</p></div>
                   </div>
-                  
                   <div className="space-y-4">
-                    <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5">
-                       <div className="h-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-1000 ease-out" style={{ width: `${dashboardMetrics.progress}%` }}></div>
-                    </div>
-                    <div className="flex justify-between text-[10px] font-black uppercase tracking-widest">
-                       <span className="text-slate-500">Acumulado: {formatCurrency(dashboardMetrics.totalAnnual)}</span>
-                       <span className="text-blue-400">Restante: {formatCurrency(dashboardMetrics.remainingMei)}</span>
-                    </div>
+                    <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden border border-white/5"><div className="h-full bg-gradient-to-r from-blue-600 to-blue-400 transition-all duration-1000 ease-out" style={{ width: `${dashboardMetrics.progress}%` }}></div></div>
+                    <div className="flex justify-between text-[10px] font-black uppercase tracking-widest"><span className="text-slate-500">Acumulado: {formatCurrency(dashboardMetrics.totalAnnual)}</span><span className="text-blue-400">Restante: {formatCurrency(dashboardMetrics.remainingMei)}</span></div>
                   </div>
-
                   <div className="mt-12 pt-8 border-t border-white/5 grid grid-cols-2 md:grid-cols-3 gap-8">
-                     <div>
-                        <span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Faturamento Mensal</span>
-                        <p className="text-xl font-black text-white">{formatCurrency(dashboardMetrics.totalMonthly)}</p>
-                     </div>
-                     <div>
-                        <span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Ticket Médio</span>
-                        <p className="text-xl font-black text-white">{formatCurrency(dashboardMetrics.avgTicket)}</p>
-                     </div>
-                     <div className="hidden md:block">
-                        <span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Total Emissões</span>
-                        <p className="text-xl font-black text-white">{dashboardMetrics.yearItemsCount} un</p>
-                     </div>
+                     <div><span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Faturamento Mensal</span><p className="text-xl font-black text-white">{formatCurrency(dashboardMetrics.totalMonthly)}</p></div>
+                     <div><span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Ticket Médio</span><p className="text-xl font-black text-white">{formatCurrency(dashboardMetrics.avgTicket)}</p></div>
+                     <div className="hidden md:block"><span className="text-[9px] font-black text-slate-600 uppercase block tracking-widest mb-2">Total Emissões</span><p className="text-xl font-black text-white">{dashboardMetrics.yearItemsCount} un</p></div>
                   </div>
                </div>
-
                <div className="bg-[#0f172a]/40 backdrop-blur-2xl p-10 rounded-[3rem] border border-white/10 flex flex-col justify-between group hover:border-blue-500/30 transition-all">
                   <div>
-                    <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center mb-6 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-all">
-                      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
-                    </div>
+                    <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center mb-6 text-blue-400 group-hover:bg-blue-600 group-hover:text-white transition-all"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="12" y1="1" x2="12" y2="23"></line><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg></div>
                     <h3 className="text-xl font-black text-white mb-2">Projeção MEI</h3>
                     <p className="text-slate-500 text-xs leading-relaxed">Com base no seu histórico anual, você está operando dentro da conformidade fiscal estabelecida para 2024.</p>
                   </div>
-                  <div className="mt-8">
-                     <div className="flex items-center gap-3 py-3 px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl">
-                        <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                        <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">Status: Saudável</span>
-                     </div>
-                  </div>
+                  <div className="mt-8"><div className="flex items-center gap-3 py-3 px-4 bg-emerald-500/10 border border-emerald-500/20 rounded-2xl"><div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div><span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">Status: Saudável</span></div></div>
                </div>
             </div>
-
             <div className="space-y-6">
-              <div className="flex items-center justify-between mb-8 px-4">
-                 <h3 className="text-[11px] font-black text-slate-500 uppercase tracking-[0.3em]">Emissões Recentes</h3>
-                 <span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">{history.length} Documentos Totais</span>
-              </div>
+              <div className="flex items-center justify-between mb-8 px-4"><h3 className="text-[11px] font-black text-slate-500 uppercase tracking-[0.3em]">Emissões Recentes</h3><span className="text-[10px] font-black text-slate-700 uppercase tracking-widest">{history.length} Documentos Totais</span></div>
               {history.length === 0 ? (
-                <div className="text-center py-32 bg-white/5 rounded-[4rem] border border-dashed border-white/10 text-slate-500 font-black uppercase tracking-widest text-xs">
-                  Sem emissões registradas no sistema
-                </div>
+                <div className="text-center py-32 bg-white/5 rounded-[4rem] border border-dashed border-white/10 text-slate-500 font-black uppercase tracking-widest text-xs">Sem emissões registradas no sistema</div>
               ) : history.map(item => (
                 <div key={item.id} className="group bg-white/5 backdrop-blur-xl border border-white/10 p-6 md:p-10 rounded-[3rem] flex flex-col md:flex-row md:items-center justify-between hover:border-blue-500/50 hover:bg-white/[0.07] transition-all gap-6 shadow-2xl">
                   <div className="flex items-center gap-8">
-                    <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all">
-                       #{item.data.invoiceNumber.slice(-2)}
-                    </div>
+                    <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all">#{item.data.invoiceNumber.slice(-2)}</div>
                     <div>
                       <h4 className="font-black text-white text-xl uppercase tracking-tight">{item.clientName}</h4>
-                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1.5 flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-                        DOCUMENTO #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}
-                      </p>
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1.5 flex items-center gap-2"><span className="w-1.5 h-1.5 bg-blue-500 rounded-full"></span>DOCUMENTO #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-10">
-                    <div className="text-right">
-                      <span className="font-black text-2xl text-white tracking-tighter block">{formatCurrency(item.totalValue)}</span>
-                      <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Líquido Recebido</span>
+                    <div className="text-right"><span className="font-black text-2xl text-white tracking-tighter block">{formatCurrency(item.totalValue)}</span><span className="text-[9px] font-black text-slate-600 uppercase tracking-widest">Líquido Recebido</span></div>
+                    <div className="flex gap-3">
+                      {item.pdfUrl && (<a href={item.pdfUrl} target="_blank" rel="noreferrer" className="px-5 py-5 bg-blue-400/10 text-blue-400 border border-blue-400/20 rounded-2xl hover:bg-blue-400 hover:text-white transition-all font-black text-[10px] uppercase tracking-widest flex items-center gap-2"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>PDF</a>)}
+                      <button onClick={() => { setData(item.data); setCurrentInvoiceId(item.id); setLastGeneratedPdfUrl(item.pdfUrl || null); setView('editor'); }} className="px-8 py-5 bg-white/5 text-slate-400 border border-white/10 rounded-2xl hover:bg-white/10 hover:text-white transition-all font-black text-[10px] uppercase tracking-widest active:scale-95">Abrir</button>
                     </div>
-                    <button onClick={() => { setData(item.data); setLastGeneratedPdfUrl(item.pdfUrl || null); setView('editor'); }} className="px-8 py-5 bg-white/5 text-blue-400 border border-white/10 rounded-2xl hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all font-black text-[10px] uppercase tracking-widest active:scale-95">Abrir</button>
                   </div>
                 </div>
               ))}
@@ -813,135 +847,66 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center">
                 <button onClick={() => setView('landing')} className="text-blue-400 font-black tracking-tighter text-2xl uppercase">NovaInvoice</button>
                 <div className="flex gap-2">
-                  <button onClick={() => setView('history')} title="Dashboard" className="p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-blue-600 hover:border-blue-600 transition-all">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
-                  </button>
-                  <button onClick={() => setView('landing')} title="Cancelar" className="p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-red-500/20 hover:border-red-500 transition-all text-slate-500 hover:text-red-400">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
-                  </button>
+                  <button onClick={() => setView('history')} title="Dashboard" className="p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-blue-600 hover:border-blue-600 transition-all"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg></button>
+                  <button onClick={() => setView('landing')} title="Cancelar" className="p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-red-500/20 hover:border-red-500 transition-all text-slate-500 hover:text-red-400"><svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
                 </div>
               </div>
+              {currentInvoiceId && (<div className="bg-blue-600/10 border border-blue-600/30 px-5 py-3 rounded-2xl flex items-center justify-between"><div className="flex items-center gap-3"><div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div><span className="text-[10px] font-black uppercase text-blue-400 tracking-widest">Modo Edição de Histórico</span></div><button onClick={handleNewDocument} className="text-[9px] font-black text-slate-500 hover:text-white uppercase tracking-widest">Criar Cópia</button></div>)}
             </header>
-
             <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-8 relative">
-              <div className="flex justify-between items-center">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">IDENTIDADE VISUAL</h3>
-                <button id="save-pattern-btn" onClick={saveGlobalSettings} className="text-[10px] font-black px-6 py-2 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-600/30 hover:scale-105 transition-all">Salvar</button>
-              </div>
-
-              <div className="grid grid-cols-3 gap-3">
-                {(['classic', 'modern', 'minimal'] as const).map(t => (
-                  <button key={t} onClick={() => updateBranding('template', t)} className={`py-4 text-[10px] font-black uppercase rounded-2xl border transition-all ${data.branding.template === t ? 'bg-blue-600 text-white border-blue-600 shadow-lg' : 'bg-white/5 text-slate-500 border-white/10 hover:border-white/20'}`}>
-                    {t === 'classic' ? 'RETRÔ' : t === 'modern' ? 'NOVO' : 'MINI'}
-                  </button>
-                ))}
-              </div>
-
+              <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">IDENTIDADE VISUAL</h3><button id="save-pattern-btn" onClick={saveGlobalSettings} className="text-[10px] font-black px-6 py-2 bg-blue-600 text-white rounded-2xl shadow-lg shadow-blue-600/30 hover:scale-105 transition-all">Salvar</button></div>
+              <div className="grid grid-cols-3 gap-3">{(['classic', 'modern', 'minimal'] as const).map(t => (<button key={t} onClick={() => updateBranding('template', t)} className={`py-4 text-[10px] font-black uppercase rounded-2xl border transition-all ${data.branding.template === t ? 'bg-blue-600 text-white border-blue-600 shadow-lg' : 'bg-white/5 text-slate-500 border-white/10 hover:border-white/20'}`}>{t === 'classic' ? 'RETRÔ' : t === 'modern' ? 'NOVO' : 'MINI'}</button>))}</div>
               <div className="flex flex-col sm:flex-row items-center gap-8">
                 <div className="w-32 h-32 bg-white rounded-[2.5rem] flex items-center justify-center overflow-hidden relative group shrink-0 shadow-2xl">
                   {data.branding.logoImage ? <img src={data.branding.logoImage} className="w-full h-full object-contain p-4" /> : <span className="text-5xl font-black text-slate-800">{data.branding.logoLetter}</span>}
-                  <div className="absolute inset-0 bg-blue-600/40 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer transition-opacity" onClick={() => fileInputRef.current?.click()}>
-                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-                   </div>
+                  <div className="absolute inset-0 bg-blue-600/40 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer transition-opacity" onClick={() => fileInputRef.current?.click()}><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg></div>
                 </div>
                 <div className="flex-1 w-full space-y-4">
                   <button onClick={() => fileInputRef.current?.click()} className="text-[10px] font-black w-full py-4 bg-white/5 border border-white/10 rounded-2xl uppercase tracking-widest hover:bg-white/10 transition-all">ALTERAR IMAGEM</button>
                   <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} />
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">LETRA DA LOGO</label>
-                    <input type="text" value={data.branding.logoLetter} onChange={(e) => updateBranding('logoLetter', e.target.value.substring(0,1).toUpperCase())} className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all" />
-                  </div>
+                  <div className="space-y-2"><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">LETRA DA LOGO</label><input type="text" value={data.branding.logoLetter} onChange={(e) => updateBranding('logoLetter', e.target.value.substring(0,1).toUpperCase())} className="w-full px-5 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all" /></div>
                 </div>
               </div>
-
               <div className="grid grid-cols-2 gap-5">
-                <div className="space-y-3">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">COR DE FUNDO</label>
-                  <div className="p-1.5 bg-white border border-white/10 rounded-2xl flex items-center h-16"><input type="color" value={data.branding.primaryColor} onChange={(e) => updateBranding('primaryColor', e.target.value)} className="w-full h-full rounded-xl cursor-pointer border-0 bg-transparent p-0 overflow-hidden" /></div>
-                </div>
-                <div className="space-y-3">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">COR DETALHE</label>
-                  <div className="p-1.5 bg-white border border-white/10 rounded-2xl flex items-center h-16"><input type="color" value={data.branding.secondaryColor} onChange={(e) => updateBranding('secondaryColor', e.target.value)} className="w-full h-full rounded-xl cursor-pointer border-0 bg-transparent p-0 overflow-hidden" /></div>
-                </div>
+                <div className="space-y-3"><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">COR DE FUNDO</label><div className="p-1.5 bg-white border border-white/10 rounded-2xl flex items-center h-16"><input type="color" value={data.branding.primaryColor} onChange={(e) => updateBranding('primaryColor', e.target.value)} className="w-full h-full rounded-xl cursor-pointer border-0 bg-transparent p-0 overflow-hidden" /></div></div>
+                <div className="space-y-3"><label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">COR DETALHE</label><div className="p-1.5 bg-white border border-white/10 rounded-2xl flex items-center h-16"><input type="color" value={data.branding.secondaryColor} onChange={(e) => updateBranding('secondaryColor', e.target.value)} className="w-full h-full rounded-xl cursor-pointer border-0 bg-transparent p-0 overflow-hidden" /></div></div>
               </div>
             </section>
-
             <section className="bg-white/5 backdrop-blur-xl p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-2xl space-y-6">
               <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Cronologia e Identificação</h3>
-              <div className="grid grid-cols-2 gap-5">
-                <InputGroup label="Número Doc" value={data.invoiceNumber} onChange={(e) => setData({...data, invoiceNumber: e.target.value})} />
-                <InputGroup label="Série" value={data.serie} onChange={(e) => setData({...data, serie: e.target.value})} />
-                <InputGroup label="Emissão" type="date" value={data.issueDate} onChange={(e) => setData({...data, issueDate: e.target.value})} />
-                <InputGroup label="Mês Ref." value={data.competency} onChange={(e) => setData({...data, competency: e.target.value})} />
-              </div>
+              <div className="grid grid-cols-2 gap-5"><InputGroup label="Número Doc" value={data.invoiceNumber} onChange={(e) => setData({...data, invoiceNumber: e.target.value})} /><InputGroup label="Série" value={data.serie} onChange={(e) => setData({...data, serie: e.target.value})} /><InputGroup label="Emissão" type="date" value={data.issueDate} onChange={(e) => setData({...data, issueDate: e.target.value})} /><InputGroup label="Mês Ref." value={data.competency} onChange={(e) => setData({...data, competency: e.target.value})} /></div>
             </section>
-
             <EntityForm title="Informações do Prestador" entity={data.provider} updateFn={updateProvider} />
-            
-            <section className="bg-white/5 backdrop-blur-xl p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-2xl">
-               <InputGroup label="Chave PIX de Recebimento" value={data.provider.pixKey || ''} onChange={(e) => updateProvider('pixKey', e.target.value)} placeholder="Seu CPF, E-mail ou Celular" />
-            </section>
-
+            <section className="bg-white/5 backdrop-blur-xl p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-2xl"><InputGroup label="Chave PIX de Recebimento" value={data.provider.pixKey || ''} onChange={(e) => updateProvider('pixKey', e.target.value)} placeholder="Seu CPF, E-mail ou Celular" /></section>
             <EntityForm title="Tomador (Cliente)" entity={data.client} updateFn={updateClient} isClient onSearch={() => setIsModalOpen(true)} onSave={handleSaveClient} saveButtonId="save-client-btn" />
-
             <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-6">
-              <div className="flex justify-between items-center">
-                <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Configurações de Mensagem</h3>
-                <span className="text-[9px] px-2 py-1 bg-white/5 rounded-lg text-slate-600 font-bold uppercase">Template Global</span>
-              </div>
+              <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Configurações de Mensagem</h3><span className="text-[9px] px-2 py-1 bg-white/5 rounded-lg text-slate-600 font-bold uppercase">Template Global</span></div>
               <InputGroup label="Template da Mensagem" isTextArea value={waTemplate} onChange={(e) => setWaTemplate(e.target.value)} placeholder="Dica: use {cliente}, {valor}, {numero} e {link} para preenchimento automático." />
-              <div className="grid grid-cols-4 gap-2">
-                {['{cliente}', '{valor}', '{numero}', '{link}'].map(tag => (
-                  <button key={tag} onClick={() => setWaTemplate(prev => prev + ' ' + tag)} className="text-[9px] font-black text-slate-500 p-2 bg-white/5 rounded-xl hover:bg-white/10 transition-all">{tag}</button>
-                ))}
-              </div>
+              <div className="grid grid-cols-4 gap-2">{['{cliente}', '{valor}', '{numero}', '{link}'].map(tag => (<button key={tag} onClick={() => setWaTemplate(prev => prev + ' ' + tag)} className="text-[9px] font-black text-slate-500 p-2 bg-white/5 rounded-xl hover:bg-white/10 transition-all">{tag}</button>))}</div>
             </section>
-
             <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 space-y-6">
               <div className="flex justify-between items-center"><h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Itens</h3><button onClick={() => setData(prev => ({ ...prev, items: [...prev.items, { id: Math.random().toString(36).substr(2, 9), description: '', quantity: 1, unitValue: 0 }] }))} className="text-[10px] font-black text-blue-400 bg-blue-400/10 px-4 py-2 rounded-full">Add</button></div>
               {data.items.map(item => (
                 <div key={item.id} className="p-5 bg-white/5 border border-white/10 rounded-3xl relative">
                   <InputGroup label="Descrição" value={item.description} onChange={(e) => setData({...data, items: data.items.map(i => i.id === item.id ? {...i, description: e.target.value} : i)})} />
-                  <div className="grid grid-cols-2 gap-4 mt-4">
-                    <InputGroup label="Qtd" type="number" value={item.quantity} onChange={(e) => setData({...data, items: data.items.map(i => i.id === item.id ? {...i, quantity: parseFloat(e.target.value) || 0} : i)})} />
-                    <InputGroup label="Preço" type="number" value={item.unitValue} onChange={(e) => setData({...data, items: data.items.map(i => i.id === item.id ? {...i, unitValue: parseFloat(e.target.value) || 0} : i)})} />
-                  </div>
+                  <div className="grid grid-cols-2 gap-4 mt-4"><InputGroup label="Qtd" type="number" value={item.quantity} onChange={(e) => setData({...data, items: data.items.map(i => i.id === item.id ? {...i, quantity: parseFloat(e.target.value) || 0} : i)})} /><InputGroup label="Preço" type="number" value={item.unitValue} onChange={(e) => setData({...data, items: data.items.map(i => i.id === item.id ? {...i, unitValue: parseFloat(e.target.value) || 0} : i)})} /></div>
                 </div>
               ))}
             </section>
-
             <section className="bg-white/5 backdrop-blur-xl p-6 md:p-8 rounded-[2.5rem] border border-white/10 shadow-2xl space-y-6 pb-12">
               <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Escopo e Fisco</h3>
-              <div className="grid grid-cols-3 gap-3">
-                <InputGroup label="ISS %" type="number" value={data.taxRate} onChange={(e) => setData({...data, taxRate: parseFloat(e.target.value) || 0})} />
-                <InputGroup label="Outras Ret. R$" type="number" value={data.taxes.others} onChange={(e) => setData({...data, taxes: {...data.taxes, others: parseFloat(e.target.value) || 0}})} />
-                <InputGroup label="Desconto R$" type="number" value={data.discount} onChange={(e) => setData({...data, discount: parseFloat(e.target.value) || 0})} />
-              </div>
-              <InputGroup label="Código Municipal" value={data.serviceCode} onChange={(e) => setData({...data, serviceCode: e.target.value})} />
-              <InputGroup label="Atividade (CNAE)" value={data.cnae} onChange={(e) => setData({...data, cnae: e.target.value})} />
-              <InputGroup label="Notas Adicionais" isTextArea value={data.notes} onChange={(e) => setData({...data, notes: e.target.value})} />
+              <div className="grid grid-cols-3 gap-3"><InputGroup label="ISS %" type="number" value={data.taxRate} onChange={(e) => setData({...data, taxRate: parseFloat(e.target.value) || 0})} /><InputGroup label="Outras Ret. R$" type="number" value={data.taxes.others} onChange={(e) => setData({...data, taxes: {...data.taxes, others: parseFloat(e.target.value) || 0}})} /><InputGroup label="Desconto R$" type="number" value={data.discount} onChange={(e) => setData({...data, discount: parseFloat(e.target.value) || 0})} /></div>
+              <InputGroup label="Código Municipal" value={data.serviceCode} onChange={(e) => setData({...data, serviceCode: e.target.value})} /><InputGroup label="Atividade (CNAE)" value={data.cnae} onChange={(e) => setData({...data, cnae: e.target.value})} /><InputGroup label="Notas Adicionais" isTextArea value={data.notes} onChange={(e) => setData({...data, notes: e.target.value})} />
             </section>
-
             <div className="bg-[#020617]/95 pt-8 pb-12 sticky bottom-0 z-20 border-t border-white/10 flex flex-col gap-4">
               <div className="grid grid-cols-12 gap-3">
-                <button disabled={isEmitting} onClick={handlePrint} className={`col-span-8 py-6 text-white rounded-[2.5rem] font-black text-xs uppercase tracking-[0.3em] transition-all ${isEmitting ? 'opacity-50' : 'bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-600/20'}`}>
-                  {isEmitting ? 'Sincronizando...' : 'Gerar PDF'}
-                </button>
-                <button onClick={handleOpenWhatsAppModal} className="col-span-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-[2.5rem] flex items-center justify-center shadow-xl shadow-emerald-600/20 transition-all active:scale-95" title="Enviar WhatsApp">
-                   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                </button>
+                <button disabled={isEmitting} onClick={handlePrint} className={`col-span-8 py-6 text-white rounded-[2.5rem] font-black text-xs uppercase tracking-[0.3em] transition-all ${isEmitting ? 'opacity-50' : 'bg-blue-600 hover:bg-blue-500 shadow-xl shadow-blue-600/20'}`}>{isEmitting ? 'Sincronizando...' : (currentInvoiceId ? 'Atualizar PDF' : 'Gerar PDF')}</button>
+                <button onClick={handleOpenWhatsAppModal} className="col-span-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-[2.5rem] flex items-center justify-center shadow-xl shadow-emerald-600/20 transition-all active:scale-95" title="Enviar WhatsApp"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></button>
               </div>
             </div>
           </div>
-
           <main className={`flex-1 overflow-x-hidden lg:overflow-y-auto p-4 md:p-16 flex justify-center items-start bg-transparent no-print scrollbar-hide`}>
-            <div className="w-full max-w-[900px] flex justify-center">
-              <div className="origin-top scale-[0.4] sm:scale-[0.6] lg:scale-[0.8] xl:scale-100 transition-all duration-500">
-                 <div ref={invoiceRef} className="shadow-[0_48px_100px_-24px_rgba(0,0,0,0.8)]">
-                    <InvoicePreview data={data} />
-                 </div>
-              </div>
-            </div>
+            <div className="w-full max-w-[900px] flex justify-center"><div className="origin-top scale-[0.4] sm:scale-[0.6] lg:scale-[0.8] xl:scale-100 transition-all duration-500"><div ref={invoiceRef} className="shadow-[0_48px_100px_-24px_rgba(0,0,0,0.8)]"><InvoicePreview data={data} /></div></div></div>
           </main>
         </div>
       )}

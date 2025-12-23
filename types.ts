@@ -71,6 +71,7 @@ export interface InvoiceData {
   discount: number;
   labels: InvoiceLabels;
   branding: Branding;
+  pdfUrl?: string; // Campo para persistir a URL curta dentro do JSON
 }
 
 export interface InvoiceHistoryItem {
