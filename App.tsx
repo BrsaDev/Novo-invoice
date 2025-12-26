@@ -26,7 +26,7 @@ const LABEL_PRESETS: Record<string, Partial<InvoiceLabels>> = {
     documentTitle: 'Recibo de Prestação de Serviços',
     documentSubtitle: 'Faturamento de Serviços Profissionais',
   },
-  nota: {
+  note: {
     documentTitle: 'Nota Fiscal de Serviços (RPS)',
     documentSubtitle: 'Documento Auxiliar de Faturamento',
   },
@@ -541,38 +541,51 @@ const App: React.FC = () => {
           </div>
         </div>
       ) : view === 'history' ? (
-        <div className="p-6 md:p-16 max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500">
-           <header className="flex flex-col md:flex-row justify-between items-end gap-6">
+        <div className="p-4 md:p-16 max-w-6xl mx-auto space-y-8 md:space-y-12 animate-in fade-in duration-500">
+           <header className="flex flex-col md:flex-row justify-between md:items-end gap-6">
              <div>
                <button onClick={() => setView('landing')} className="text-blue-500 text-[10px] font-black uppercase tracking-widest mb-4 hover:translate-x-[-4px] transition-transform">← Voltar</button>
-               <h1 className="text-6xl font-black tracking-tighter text-white">Histórico Cloud</h1>
+               <h1 className="text-4xl md:text-6xl font-black tracking-tighter text-white">Histórico Cloud</h1>
              </div>
-             <div className="bg-white/5 p-8 rounded-[2.5rem] border border-white/10 text-right shadow-2xl min-w-[320px]">
+             <div className="bg-white/5 p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] border border-white/10 md:text-right shadow-2xl w-full md:w-auto md:min-w-[320px]">
                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Monitor Teto MEI Anual</span>
                <div className="flex justify-between items-end mb-4">
-                 <p className="text-3xl font-black text-white">{formatCurrency(dashboardMetrics.totalAnnual)}</p>
-                 <p className="text-xl font-black text-blue-500">{Math.round(dashboardMetrics.progress)}%</p>
+                 <p className="text-2xl md:text-3xl font-black text-white">{formatCurrency(dashboardMetrics.totalAnnual)}</p>
+                 <p className="text-lg md:text-xl font-black text-blue-500">{Math.round(dashboardMetrics.progress)}%</p>
                </div>
                <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden border border-white/5"><div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: `${dashboardMetrics.progress}%` }}></div></div>
              </div>
            </header>
            <div className="space-y-4">
               {history.length === 0 ? (
-                <div className="text-center py-40 border border-dashed border-white/10 rounded-[3rem] text-slate-700 font-black uppercase tracking-widest">Nenhum documento encontrado</div>
+                <div className="text-center py-20 md:py-40 border border-dashed border-white/10 rounded-[2rem] md:rounded-[3rem] text-slate-700 font-black uppercase tracking-widest text-xs">Nenhum documento encontrado</div>
               ) : history.map(item => (
-                <div key={item.id} className="p-8 bg-white/5 border border-white/10 rounded-[3rem] flex flex-col md:flex-row items-center justify-between group hover:bg-white/[0.08] transition-all shadow-xl">
-                  <div className="flex items-center gap-8 w-full">
-                    <div className="w-16 h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all uppercase text-[10px]">{item.category === 'product' ? '📦' : '⚡'}</div>
-                    <div className="flex-1">
-                      <h4 className="font-black text-white text-2xl uppercase tracking-tight">{item.clientName}</h4>
-                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-1.5 flex items-center gap-2">Doc #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}</p>
-                    </div>
+                <div key={item.id} className="p-5 md:p-8 bg-white/5 border border-white/10 rounded-[2rem] md:rounded-[3rem] flex flex-col md:flex-row items-center group hover:bg-white/[0.08] transition-all shadow-xl gap-6 md:gap-8">
+                  {/* Icon Section */}
+                  <div className="w-12 h-12 md:w-16 md:h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all uppercase text-[10px] shrink-0">
+                    {item.category === 'product' ? '📦' : '⚡'}
                   </div>
-                  <div className="flex items-center gap-10 mt-6 md:mt-0">
-                    <div className="text-right"><span className="text-2xl font-black text-white block tracking-tighter">{formatCurrency(item.totalValue)}</span></div>
-                    <div className="flex gap-2">
-                       <button onClick={() => { setData(item.data); setCurrentInvoiceId(item.id); setView('editor'); setEditorActiveTab('form'); }} className="px-6 py-4 bg-white/5 text-slate-400 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-white/10 hover:text-white transition-all">Abrir</button>
-                       {item.pdfUrl && <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="p-4 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-2xl hover:bg-blue-500 hover:text-white transition-all"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></a>}
+                  
+                  {/* Client Info Section - flex-1 pushes everything else to the right */}
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-black text-white text-lg md:text-2xl uppercase tracking-tight truncate">
+                      {item.clientName || 'Cliente não identificado'}
+                    </h4>
+                    <p className="text-[9px] md:text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-1 md:mt-1.5 flex items-center gap-2">
+                      Doc #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}
+                    </p>
+                  </div>
+
+                  {/* Value and Actions Section - shrink-0 ensures it doesn't get squished */}
+                  <div className="flex items-center justify-between md:justify-end gap-6 md:gap-10 w-full md:w-auto pt-4 md:pt-0 border-t border-white/5 md:border-0 shrink-0">
+                    <div className="md:text-right">
+                      <span className="text-xl md:text-2xl font-black text-white block tracking-tighter">
+                        {formatCurrency(item.totalValue)}
+                      </span>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                       <button onClick={() => { setData(item.data); setCurrentInvoiceId(item.id); setView('editor'); setEditorActiveTab('form'); }} className="px-4 py-3 md:px-6 md:py-4 bg-white/5 text-slate-400 rounded-xl md:rounded-2xl text-[9px] md:text-[10px] font-black uppercase tracking-widest border border-white/10 hover:text-white transition-all">Abrir</button>
+                       {item.pdfUrl && <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="p-3 md:p-4 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-xl md:rounded-2xl hover:bg-blue-500 hover:text-white transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></a>}
                     </div>
                   </div>
                 </div>
@@ -768,7 +781,7 @@ const App: React.FC = () => {
                          <InputGroup label="Série" value={data.serie} onChange={e => setData(prev => ({ ...prev, serie: e.target.value }))} />
                       </div>
                       <div className="grid grid-cols-2 gap-4">
-                         <InputGroup label="Emissão" type="date" value={data.issueDate} onChange={e => setData(prev => ({ ...prev, issueDate: e.target.value }))} />
+                         <InputGroup label="Emissão" type="date" value={data.issueDate} onChange={e => setData(prev => ({ ...prev, invoiceDate: e.target.value }))} />
                          <InputGroup label="Competência" value={data.competency} onChange={e => setData(prev => ({ ...prev, competency: e.target.value }))} placeholder="MM/AAAA" />
                       </div>
                    </div>
