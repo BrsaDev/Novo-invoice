@@ -1,5 +1,6 @@
 
 export type InvoiceCategory = 'service' | 'product';
+export type PaymentStatus = 'pending' | 'paid';
 
 export interface Entity {
   name: string;
@@ -77,6 +78,7 @@ export interface InvoiceData {
   branding: Branding;
   pdfUrl?: string;
   whatsappMessage?: string;
+  status?: PaymentStatus;
 }
 
 export interface InvoiceHistoryItem {
@@ -87,6 +89,7 @@ export interface InvoiceHistoryItem {
   totalValue: number;
   clientName: string;
   pdfUrl?: string;
+  status: PaymentStatus;
 }
 
 export interface Expense {
@@ -95,6 +98,7 @@ export interface Expense {
   amount: number;
   category: string;
   date: string;
+  status: PaymentStatus;
 }
 
 export interface DasPayment {
@@ -102,4 +106,10 @@ export interface DasPayment {
   year: number;
   month: number;
   isPaid: boolean;
+}
+
+export interface ContractTemplate {
+  id: string;
+  title: string;
+  content: string;
 }

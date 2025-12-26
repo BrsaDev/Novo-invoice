@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment } from './types';
+import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment, PaymentStatus } from './types';
 import { InputGroup } from './components/InputGroup';
 import { InvoicePreview } from './components/InvoicePreview';
 import { ClientSearchModal } from './components/ClientSearchModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { formatCurrency, formatDate } from './utils/formatters';
 import { supabase } from './lib/supabase';
+import { CONTRACT_TEMPLATES } from './utils/contracts';
 
 const INITIAL_LABELS: InvoiceLabels = {
   documentTitle: 'Recibo de Prestação de Serviços',
@@ -88,6 +89,7 @@ const INITIAL_DATA: InvoiceData = {
   labels: INITIAL_LABELS,
   branding: INITIAL_BRANDING,
   whatsappMessage: 'Olá {{cliente}}! Segue o link do seu documento {{numero}} gerado pela {{empresa}} no valor de {{valor}}: {{link}}',
+  status: 'pending'
 };
 
 const EXPENSE_CATEGORIES = [
@@ -166,7 +168,7 @@ const EntityForm: React.FC<EntityFormProps> = ({ title, entity, updateFn, isClie
 );
 
 interface Toast { id: number; message: string; type: 'success' | 'error' | 'info'; }
-type ViewState = 'landing' | 'editor' | 'history' | 'financial-hub';
+type ViewState = 'landing' | 'editor' | 'history' | 'financial-hub' | 'contracts';
 
 const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
@@ -178,10 +180,27 @@ const App: React.FC = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [dasPayments, setDasPayments] = useState<DasPayment[]>([]);
   
+  // WhatsApp Modal State
+  const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
+  const [whatsAppRecipientPhone, setWhatsAppRecipientPhone] = useState('');
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  // Contracts State
+  const [contractForm, setContractForm] = useState({ 
+    templateId: CONTRACT_TEMPLATES[0].id, 
+    serviceDesc: '', 
+    value: '', 
+    paymentMethod: 'Transferência Bancária',
+    deadline: '30'
+  });
+  const [isContractClientModalOpen, setIsContractClientModalOpen] = useState(false);
+  const [contractClient, setContractClient] = useState<Entity | null>(null);
+  
   // States for History Filters
   const [filterSearch, setFilterSearch] = useState('');
   const [filterCategory, setFilterCategory] = useState<'all' | 'service' | 'product'>('all');
   const [filterMonth, setFilterMonth] = useState('');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'paid'>('all');
 
   // States for Expense Filters
   const [expFilterSearch, setExpFilterSearch] = useState('');
@@ -192,28 +211,33 @@ const App: React.FC = () => {
   const [analyticsYear, setAnalyticsYear] = useState(new Date().getFullYear());
   const [exportMonth, setExportMonth] = useState(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`);
 
-  // States for WhatsApp Hub
-  const [whatsOverridePhone, setWhatsOverridePhone] = useState('');
-  
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [userName, setUserName] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   
-  const [expenseForm, setExpenseForm] = useState({ description: '', amount: '', category: 'Insumos e Mercadorias', date: new Date().toISOString().split('T')[0] });
+  const [expenseForm, setExpenseForm] = useState({ 
+    description: '', 
+    amount: '', 
+    category: 'Insumos e Mercadorias', 
+    date: new Date().toISOString().split('T')[0],
+    status: 'paid' as PaymentStatus
+  });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEmitting, setIsEmitting] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isSavingClient, setIsSavingClient] = useState(false);
-  const [financialTab, setFinancialTab] = useState<'das' | 'expenses' | 'analytics'>('das');
+  const [financialTab, setFinancialTab] = useState<'das' | 'expenses' | 'analytics' | 'crm'>('das');
   const [editorActiveTab, setEditorActiveTab] = useState<'form' | 'preview'>('form');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
 
   const invoiceRef = useRef<HTMLDivElement>(null);
+  const contractRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const whatsappTextAreaRef = useRef<HTMLTextAreaElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
 
   const WHATSAPP_TAGS = [
     { label: 'Cliente', tag: '{{cliente}}' },
@@ -239,10 +263,9 @@ const App: React.FC = () => {
     }
   }, [session]);
 
-  // Sync override phone when client changes
   useEffect(() => {
     if (data.client) {
-      setWhatsOverridePhone(data.client.whatsapp || data.client.phone || '');
+      setWhatsAppRecipientPhone(data.client.whatsapp || data.client.phone || '');
     }
   }, [data.client]);
 
@@ -276,12 +299,28 @@ const App: React.FC = () => {
 
   const loadHistory = async () => {
     const { data: invoices } = await supabase.from('invoices').select('*').order('created_at', { ascending: false });
-    if (invoices) setHistory(invoices.map(inv => ({ id: inv.id, timestamp: new Date(inv.created_at).getTime(), category: inv.category as InvoiceCategory, data: inv.full_data, totalValue: Number(inv.total_value), clientName: inv.client_name, pdfUrl: inv.pdf_url })));
+    if (invoices) setHistory(invoices.map(inv => ({ 
+      id: inv.id, 
+      timestamp: new Date(inv.created_at).getTime(), 
+      category: inv.category as InvoiceCategory, 
+      data: inv.full_data, 
+      totalValue: Number(inv.total_value), 
+      clientName: inv.client_name, 
+      pdfUrl: inv.pdf_url,
+      status: (inv.full_data.status || 'pending') as PaymentStatus
+    })));
   };
 
   const loadExpenses = async () => {
     const { data: list } = await supabase.from('expenses').select('*').order('date', { ascending: false });
-    if (list) setExpenses(list.map(e => ({ id: e.id, description: e.description, amount: Number(e.amount), category: e.category, date: e.date })));
+    if (list) setExpenses(list.map(e => ({ 
+      id: e.id, 
+      description: e.description, 
+      amount: Number(e.amount), 
+      category: e.category, 
+      date: e.date,
+      status: (e.status || 'paid') as PaymentStatus
+    })));
   };
 
   const loadDasPayments = async () => {
@@ -289,21 +328,20 @@ const App: React.FC = () => {
     if (list) setDasPayments(list.map(d => ({ id: d.id, year: d.year, month: d.month, isPaid: d.is_paid })));
   };
 
-  // Logic for filtering history without mutation
   const filteredHistory = useMemo(() => {
     return history.filter(item => {
       const matchSearch = item.clientName.toLowerCase().includes(filterSearch.toLowerCase()) || 
                           item.data.invoiceNumber.includes(filterSearch);
       const matchCategory = filterCategory === 'all' || item.category === filterCategory;
+      const matchStatus = filterStatus === 'all' || item.status === filterStatus;
       const itemDate = new Date(item.timestamp);
       const matchMonth = !filterMonth || (
         `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}` === filterMonth
       );
-      return matchSearch && matchCategory && matchMonth;
+      return matchSearch && matchCategory && matchStatus && matchMonth;
     });
-  }, [history, filterSearch, filterCategory, filterMonth]);
+  }, [history, filterSearch, filterCategory, filterStatus, filterMonth]);
 
-  // Logic for filtering expenses without mutation
   const filteredExpenses = useMemo(() => {
     return expenses.filter(e => {
       const matchSearch = e.description.toLowerCase().includes(expFilterSearch.toLowerCase());
@@ -313,69 +351,110 @@ const App: React.FC = () => {
     });
   }, [expenses, expFilterSearch, expFilterCategory, expFilterMonth]);
 
-  // Metrics optimized for filters in the Financial Hub
   const dashboardMetrics = useMemo(() => {
     const now = new Date();
     const currentYear = now.getFullYear();
-    
-    // Base annual data for progress bar (fixed to year)
     const yearHistory = history.filter(h => new Date(h.timestamp).getFullYear() === currentYear);
     const totalAnnualRevenue = yearHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
     const progress = Math.min(100, (totalAnnualRevenue / 81000) * 100);
 
-    // Contextual Data based on GLOBAL FILTERS (Shared across tabs)
     let relevantHistory = yearHistory;
     let relevantExpenses = expenses.filter(e => new Date(e.date).getFullYear() === currentYear);
 
-    // Apply shared filters to Metrics
     if (expFilterMonth) {
         relevantHistory = history.filter(h => {
             const d = new Date(h.timestamp);
-            const itemCompetency = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-            return itemCompetency === expFilterMonth;
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}` === expFilterMonth;
         });
         relevantExpenses = expenses.filter(e => e.date.startsWith(expFilterMonth));
     }
-    
-    if (expFilterCategory !== 'all') {
-        relevantExpenses = relevantExpenses.filter(e => e.category === expFilterCategory);
-    }
+    if (expFilterCategory !== 'all') relevantExpenses = relevantExpenses.filter(e => e.category === expFilterCategory);
 
-    if (expFilterSearch) {
-        relevantExpenses = relevantExpenses.filter(e => e.description.toLowerCase().includes(expFilterSearch.toLowerCase()));
-    }
-
-    // Category-specific totals for the bento grid filters (always based on current year or month if filtered)
     const categoryTotals: Record<string, number> = {};
     const baseExpensesForIcons = expFilterMonth ? expenses.filter(e => e.date.startsWith(expFilterMonth)) : expenses.filter(e => new Date(e.date).getFullYear() === currentYear);
-    baseExpensesForIcons.forEach(e => {
-        categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
-    });
+    baseExpensesForIcons.forEach(e => categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount);
 
     const faturamentoBruto = relevantHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
-    const custoOperacional = relevantExpenses.reduce((acc, curr) => acc + curr.amount, 0);
+    // Custo Operacional agora apenas abate o que está como PAGO
+    const custoOperacional = relevantExpenses
+      .filter(e => e.status === 'paid')
+      .reduce((acc, curr) => acc + curr.amount, 0);
     
-    // Analytics calculations (DASN Assistant & Forecasting)
     const histSelectedYear = history.filter(h => new Date(h.timestamp).getFullYear() === analyticsYear);
     const totalServicos = histSelectedYear.filter(h => h.category === 'service').reduce((acc, curr) => acc + curr.totalValue, 0);
     const totalProdutos = histSelectedYear.filter(h => h.category === 'product').reduce((acc, curr) => acc + curr.totalValue, 0);
     
-    // Monthly trend for forecasting
     const currentMonthNum = now.getMonth() + 1;
     const avgMonthly = totalAnnualRevenue / currentMonthNum;
     const projectedYearEnd = avgMonthly * 12;
 
+    // CRM Logic
+    const clientRankingMap: Record<string, { total: number, count: number, lastDate: number }> = {};
+    history.forEach(h => {
+      if (!clientRankingMap[h.clientName]) clientRankingMap[h.clientName] = { total: 0, count: 0, lastDate: 0 };
+      clientRankingMap[h.clientName].total += h.totalValue;
+      clientRankingMap[h.clientName].count += 1;
+      clientRankingMap[h.clientName].lastDate = Math.max(clientRankingMap[h.clientName].lastDate, h.timestamp);
+    });
+
+    const topClients = Object.entries(clientRankingMap)
+      .sort((a, b) => b[1].total - a[1].total)
+      .slice(0, 5)
+      .map(([name, stats]) => ({ name, ...stats }));
+
+    const inactiveClients = Object.entries(clientRankingMap)
+      .filter(([_, stats]) => (Date.now() - stats.lastDate) > (1000 * 60 * 60 * 24 * 60)) // 60 days
+      .sort((a, b) => a[1].lastDate - b[1].lastDate)
+      .slice(0, 5)
+      .map(([name, stats]) => ({ name, ...stats }));
+
     return { 
       totalAnnual: totalAnnualRevenue, 
-      faturamentoBruto,
-      custoOperacional,
+      faturamentoBruto, custoOperacional, 
       lucroReal: faturamentoBruto - custoOperacional, 
-      progress,
-      categoryTotals,
-      dasn: { totalServicos, totalProdutos },
-      forecasting: { avgMonthly, projectedYearEnd }
+      progress, categoryTotals, 
+      dasn: { totalServicos, totalProdutos }, 
+      forecasting: { avgMonthly, projectedYearEnd },
+      crm: { topClients, inactiveClients }
     };
-  }, [history, expenses, expFilterMonth, expFilterCategory, expFilterSearch, analyticsYear]);
+  }, [history, expenses, expFilterMonth, expFilterCategory, analyticsYear]);
+
+  const togglePaymentStatus = async (item: InvoiceHistoryItem) => {
+    const newStatus: PaymentStatus = item.status === 'paid' ? 'pending' : 'paid';
+    const updatedFullData = { ...item.data, status: newStatus };
+    const { error } = await supabase.from('invoices').update({ full_data: updatedFullData }).eq('id', item.id);
+    if (!error) { showToast(`Status atualizado para ${newStatus === 'paid' ? 'PAGO' : 'PENDENTE'}.`, 'success'); loadHistory(); }
+  };
+
+  const toggleExpenseStatus = async (expense: Expense) => {
+    const newStatus: PaymentStatus = expense.status === 'paid' ? 'pending' : 'paid';
+    const { error } = await supabase.from('expenses').update({ status: newStatus }).eq('id', expense.id);
+    if (!error) { showToast(`Despesa marcada como ${newStatus === 'paid' ? 'PAGA' : 'PENDENTE'}.`, 'success'); loadExpenses(); }
+  };
+
+  const handleOpenWhatsAppModalFromHistory = (item: InvoiceHistoryItem) => {
+      setData(item.data);
+      setWhatsAppRecipientPhone(item.data.client.whatsapp || item.data.client.phone || '');
+      setIsWhatsAppModalOpen(true);
+  };
+
+  const handleGenerateContract = async () => {
+    if (!contractClient || !contractRef.current) return showToast('Selecione um cliente e preencha os dados.', 'error');
+    setIsEmitting(true);
+    await new Promise(r => setTimeout(r, 500));
+    try {
+      const element = contractRef.current;
+      const canvas = await (window as any).html2canvas(element, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+      const imgData = canvas.toDataURL('image/png');
+      const { jsPDF } = (window as any).jspdf;
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Contrato_${contractClient.name}.pdf`);
+      showToast('Contrato gerado com sucesso.', 'success');
+    } catch { showToast('Erro ao gerar contrato.', 'error'); } finally { setIsEmitting(false); }
+  };
 
   const handleSaveProfile = async () => {
     if (!session?.user) return;
@@ -431,8 +510,19 @@ const App: React.FC = () => {
     e.preventDefault();
     const amount = parseFloat(expenseForm.amount);
     if (!expenseForm.description || isNaN(amount)) return showToast('Valores inválidos.', 'error');
-    const { error } = await supabase.from('expenses').insert({ user_id: session.user.id, description: expenseForm.description, amount, category: expenseForm.category, date: expenseForm.date });
-    if (!error) { showToast('Despesa registrada.', 'success'); setExpenseForm({ ...expenseForm, description: '', amount: '' }); loadExpenses(); }
+    const { error } = await supabase.from('expenses').insert({ 
+      user_id: session.user.id, 
+      description: expenseForm.description, 
+      amount, 
+      category: expenseForm.category, 
+      date: expenseForm.date,
+      status: expenseForm.status
+    });
+    if (!error) { 
+      showToast('Despesa registrada.', 'success'); 
+      setExpenseForm({ ...expenseForm, description: '', amount: '', status: 'paid' }); 
+      loadExpenses(); 
+    }
   };
 
   const handleDeleteExpense = async (id: string) => {
@@ -447,23 +537,12 @@ const App: React.FC = () => {
         return d.getFullYear() === parseInt(year) && (d.getMonth() + 1) === parseInt(month);
     });
     const filteredExp = expenses.filter(e => e.date.startsWith(exportMonth));
-
     if (filteredHist.length === 0 && filteredExp.length === 0) return showToast('Sem dados para exportar neste mês.', 'error');
 
-    let content = `RELATÓRIO MENSAL - ${month}/${year}\n`;
-    content += `GERADO POR: ${data.provider.name}\n`;
-    content += `--------------------------------------------------\n\n`;
-    
-    content += `DOCS EMITIDOS:\n`;
-    filteredHist.forEach(h => {
-        content += `${new Date(h.timestamp).toLocaleDateString('pt-BR')} | ${h.data.invoiceNumber} | ${h.clientName} | ${formatCurrency(h.totalValue)}\n`;
-    });
-    content += `TOTAL EMISSÕES: ${formatCurrency(filteredHist.reduce((a,b) => a+b.totalValue, 0))}\n\n`;
-
-    content += `DESPESAS REGISTRADAS:\n`;
-    filteredExp.forEach(e => {
-        content += `${formatDate(e.date)} | ${e.description} | ${e.category} | ${formatCurrency(e.amount)}\n`;
-    });
+    let content = `RELATÓRIO MENSAL - ${month}/${year}\nGERADO POR: ${data.provider.name}\n--------------------------------------------------\n\nDOCS EMITIDOS:\n`;
+    filteredHist.forEach(h => content += `${new Date(h.timestamp).toLocaleDateString('pt-BR')} | ${h.data.invoiceNumber} | ${h.clientName} | ${formatCurrency(h.totalValue)} | ${h.status.toUpperCase()}\n`);
+    content += `TOTAL EMISSÕES: ${formatCurrency(filteredHist.reduce((a,b) => a+b.totalValue, 0))}\n\nDESPESAS REGISTRADAS:\n`;
+    filteredExp.forEach(e => content += `${formatDate(e.date)} | ${e.description} | ${e.category} | ${formatCurrency(e.amount)} | ${e.status.toUpperCase()}\n`);
     content += `TOTAL DESPESAS: ${formatCurrency(filteredExp.reduce((a,b) => a+b.amount, 0))}\n`;
 
     const blob = new Blob([content], { type: 'text/plain' });
@@ -503,7 +582,7 @@ const App: React.FC = () => {
         invoice_number: data.invoiceNumber,
         total_value: data.items.reduce((a, b) => a + (b.quantity * b.unitValue), 0) - (data.discount || 0),
         category: data.category,
-        full_data: { ...data, pdfUrl: finalUrl },
+        full_data: { ...data, pdfUrl: finalUrl, status: data.status || 'pending' },
         pdf_url: finalUrl
       };
       
@@ -520,7 +599,6 @@ const App: React.FC = () => {
     const subtotal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
     const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
     const total = subtotal - totalTaxes - (data.discount || 0);
-
     return template
       .replace(/{{cliente}}/g, data.client.name || '[Nome do Cliente]')
       .replace(/{{empresa}}/g, data.provider.name || '[Sua Empresa]')
@@ -529,49 +607,35 @@ const App: React.FC = () => {
       .replace(/{{link}}/g, data.pdfUrl || '');
   };
 
-  const handleSendWhatsApp = () => {
-    const phone = whatsOverridePhone.replace(/\D/g, '') || data.client.whatsapp?.replace(/\D/g, '') || data.client.phone?.replace(/\D/g, '');
-    if (!phone) return showToast('Número de WhatsApp não informado.', 'error');
+  const handleSendWhatsAppFinal = () => {
+    const phone = whatsAppRecipientPhone.replace(/\D/g, '');
+    if (!phone) return showToast('Número de WhatsApp inválido.', 'error');
     if (!data.pdfUrl) return showToast('Gere o documento primeiro.', 'error');
-    
-    const rawMessage = data.whatsappMessage || '';
-    const parsedMessage = parseWhatsAppMessage(rawMessage);
-    const message = encodeURIComponent(parsedMessage);
-    window.open(`https://api.whatsapp.com/send?phone=55${phone}&text=${message}`, '_blank');
-  };
-
-  const handleCopyLink = () => {
-    if (data.pdfUrl) {
-      navigator.clipboard.writeText(data.pdfUrl);
-      showToast('Link copiado!', 'success');
-    }
-  };
-
-  const insertTag = (tag: string) => {
-    const textarea = whatsappTextAreaRef.current;
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const currentText = data.whatsappMessage || '';
-    const newText = currentText.substring(0, start) + tag + currentText.substring(end);
-    
-    setData(prev => ({ ...prev, whatsappMessage: newText }));
-    
-    // Reset focus and selection
-    setTimeout(() => {
-      textarea.focus();
-      const newPos = start + tag.length;
-      textarea.setSelectionRange(newPos, newPos);
-    }, 0);
+    const parsedMessage = parseWhatsAppMessage(data.whatsappMessage || '');
+    window.open(`https://api.whatsapp.com/send?phone=55${phone}&text=${encodeURIComponent(parsedMessage)}`, '_blank');
+    setIsWhatsAppModalOpen(false);
   };
 
   const handleLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => setData(prev => ({ ...prev, branding: { ...prev.branding, logoImage: reader.result as string } }));
+      reader.onloadend = () => {
+        setData(prev => ({
+          ...prev,
+          branding: { ...prev.branding, logoImage: reader.result as string }
+        }));
+      };
       reader.readAsDataURL(file);
+    }
+  };
+
+  const handleCopyLink = () => {
+    if (data.pdfUrl) { 
+      navigator.clipboard.writeText(data.pdfUrl); 
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+      showToast('Link copiado!', 'success'); 
     }
   };
 
@@ -589,102 +653,71 @@ const App: React.FC = () => {
         if (error) throw error;
         showToast('Acesso autorizado.', 'success');
       }
-    } catch (err: any) {
-      showToast(err.message || 'Erro de autenticação.', 'error');
-    } finally {
-      setIsLoggingIn(false);
-    }
+    } catch (err: any) { showToast(err.message || 'Erro de autenticação.', 'error'); } finally { setIsLoggingIn(false); }
   };
 
   const handleLogout = async () => { await supabase.auth.signOut(); setView('landing'); };
   const updateProvider = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, provider: { ...prev.provider, [field]: value } }));
   const updateClient = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, client: { ...prev.client, [field]: value } }));
 
-  // Helper to render active filter info - Now SHARED across all tabs
+  const parseContractTemplate = (template: string) => {
+    if (!contractClient) return template;
+    const providerAddress = `${data.provider.street}, ${data.provider.number} - ${data.provider.city}/${data.provider.uf}`;
+    const clientAddress = `${contractClient.street}, ${contractClient.number} - ${contractClient.city}/${contractClient.uf}`;
+    return template
+      .replace(/{{prestador_nome}}/g, data.provider.name)
+      .replace(/{{prestador_doc}}/g, data.provider.taxId)
+      .replace(/{{prestador_endereco}}/g, providerAddress)
+      .replace(/{{cliente_nome}}/g, contractClient.name)
+      .replace(/{{cliente_doc}}/g, contractClient.taxId)
+      .replace(/{{cliente_endereco}}/g, clientAddress)
+      .replace(/{{servico_descricao}}/g, contractForm.serviceDesc || '[DESCRIÇÃO]')
+      .replace(/{{valor_total}}/g, contractForm.value ? formatCurrency(parseFloat(contractForm.value)) : '[VALOR]')
+      .replace(/{{forma_pagamento}}/g, contractForm.paymentMethod)
+      .replace(/{{prazo}}/g, contractForm.deadline)
+      .replace(/{{cidade_foro}}/g, data.provider.city || '[CIDADE]')
+      .replace(/{{data_hoje}}/g, new Date().toLocaleDateString('pt-BR'));
+  };
+
   const renderFilterStatus = () => {
     const activeFilters = [];
     if (expFilterMonth) activeFilters.push(`Competência: ${expFilterMonth}`);
     if (expFilterCategory !== 'all') activeFilters.push(`Categoria: ${expFilterCategory}`);
     if (expFilterSearch) activeFilters.push(`Busca: "${expFilterSearch}"`);
-
     const hasFilters = activeFilters.length > 0;
-
     return (
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 px-2 animate-in fade-in duration-500">
             <div className="flex items-center gap-2">
                 <div className={`w-1.5 h-1.5 rounded-full ${hasFilters ? 'bg-blue-500 animate-pulse' : 'bg-slate-800'}`}></div>
                 <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest leading-none">
-                    {hasFilters
-                      ? `Exibindo análise para: ${activeFilters.join(' • ')}`
-                      : `Visualização Geral Anual (${new Date().getFullYear()})`}
+                    {hasFilters ? `Análise: ${activeFilters.join(' • ')}` : `Geral Anual (${new Date().getFullYear()})`}
                 </span>
             </div>
             {hasFilters && (
-                <button 
-                  onClick={() => { setExpFilterSearch(''); setExpFilterCategory('all'); setExpFilterMonth(''); }}
-                  className="text-[9px] font-black text-rose-500 uppercase tracking-widest hover:bg-rose-500/10 px-3 py-1.5 rounded-lg transition-all self-start md:self-auto border border-rose-500/20"
-                >
-                  Limpar Filtros Analíticos
-                </button>
+                <button onClick={() => { setExpFilterSearch(''); setExpFilterCategory('all'); setExpFilterMonth(''); }} className="text-[9px] font-black text-rose-500 uppercase tracking-widest hover:bg-rose-500/10 px-3 py-1.5 rounded-lg transition-all border border-rose-500/20">Limpar Filtros</button>
             )}
         </div>
     );
   };
 
-  if (!session) return (
-    <div className="min-h-screen lg:h-screen bg-[#020617] flex flex-col md:flex-row p-6 md:px-8 lg:p-12 relative overflow-y-auto lg:overflow-hidden items-center justify-center gap-10 md:gap-8 lg:gap-20 animate-in fade-in duration-700">
-      <div className="absolute top-[-20%] left-[-10%] w-[70%] h-[70%] bg-blue-600/5 blur-[150px] rounded-full bg-orb pointer-events-none"></div>
-      
-      {/* Hero Section */}
-      <div className="w-full max-w-2xl space-y-6 md:space-y-8 lg:space-y-12 z-10 text-center md:text-left">
-        <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-full">
-          <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-          <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nova Invoice V3.5</span>
-        </div>
-        <h1 className="text-5xl md:text-6xl lg:text-8xl font-black text-white tracking-tighter leading-[0.95] md:leading-[1] lg:leading-[0.9]">
-          Faturamento inteligente e <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600">minimalista.</span>
-        </h1>
-        <p className="text-slate-400 text-base md:text-lg lg:text-xl font-medium max-w-lg mx-auto md:mx-0">
-          Gere notas premium para serviços ou produtos e controle seu faturamento MEI de forma automática.
-        </p>
-      </div>
+  const scrollToTop = () => {
+    if (sidebarRef.current) {
+        sidebarRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
 
-      {/* Auth Card Section */}
-      <div className="w-full max-w-md z-10">
-        <div className="bg-[#0f172a]/80 backdrop-blur-3xl p-8 md:p-10 lg:p-14 rounded-[2.5rem] md:rounded-[3rem] lg:rounded-[3.5rem] border border-white/10 shadow-2xl relative">
-          <div className="text-center mb-6 md:mb-8 lg:mb-12">
-            <div className="w-16 h-16 md:w-18 md:h-18 lg:w-20 lg:h-20 bg-blue-600 rounded-[1.5rem] lg:rounded-[2rem] mx-auto mb-6 flex items-center justify-center shadow-xl shadow-blue-600/30 shrink-0">
-              <span className="text-white text-3xl md:text-4xl font-black">N</span>
-            </div>
-            <h3 className="text-2xl md:text-3xl font-black text-white tracking-tight">
-              {authMode === 'login' ? 'Bem-vindo de volta' : 'Crie sua conta'}
-            </h3>
-          </div>
-          
-          <form onSubmit={handleAuth} className="space-y-4 lg:space-y-6">
-            {authMode === 'signup' && (
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Nome Completo</label>
-                <input type="text" required value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all text-sm" placeholder="Seu Nome" />
-              </div>
-            )}
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">E-mail Corporativo</label>
-              <input type="email" required value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all text-sm" placeholder="seu@email.com" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Senha de Acesso</label>
-              <input type="password" required value={loginPass} onChange={(e) => setLoginPass(e.target.value)} className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all text-sm" placeholder="••••••••••••" />
-            </div>
-            <button disabled={isLoggingIn} type="submit" className="w-full py-5 md:py-6 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-600/20 active:scale-95 text-xs md:text-sm uppercase tracking-widest mt-2">
-              {isLoggingIn ? 'Processando...' : (authMode === 'login' ? 'Entrar no Sistema' : 'Cadastrar Agora')}
-            </button>
-          </form>
-          
-          <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="w-full mt-6 md:mt-8 text-[9px] md:text-[10px] text-slate-500 font-black uppercase tracking-widest hover:text-blue-400 transition-colors">
-            {authMode === 'login' ? 'Não possui conta? Registre-se aqui' : 'Já possui conta? Faça o login'}
-          </button>
-        </div>
+  if (!session) return (
+    <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-700">
+      <div className="max-w-md w-full space-y-8 bg-[#0f172a]/80 backdrop-blur-3xl p-10 rounded-[3rem] border border-white/10 shadow-2xl">
+        <div className="w-20 h-20 bg-blue-600 rounded-[2rem] mx-auto flex items-center justify-center text-4xl font-black shadow-xl shadow-blue-600/30">N</div>
+        <h1 className="text-4xl font-black text-white tracking-tighter">NovaInvoice</h1>
+        <form onSubmit={handleAuth} className="space-y-6">
+          {authMode === 'signup' && <InputGroup label="Nome Completo" value={userName} onChange={e => setUserName(e.target.value)} />}
+          <InputGroup label="E-mail" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} />
+          <InputGroup label="Senha" type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)} />
+          <button disabled={isLoggingIn} type="submit" className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl uppercase tracking-widest active:scale-95 transition-all">{isLoggingIn ? '...' : (authMode === 'login' ? 'Entrar' : 'Cadastrar')}</button>
+        </form>
+        <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-[10px] text-slate-500 font-black uppercase tracking-widest">{authMode === 'login' ? 'Criar conta' : 'Já tenho conta'}</button>
       </div>
     </div>
   );
@@ -692,6 +725,40 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#020617] text-white font-['Inter'] relative">
       <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })} />
+      
+      {/* WhatsApp Send Modal */}
+      {isWhatsAppModalOpen && (
+        <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-2xl animate-in fade-in zoom-in duration-300">
+            <div className="bg-[#0f172a] w-full max-w-sm rounded-[3rem] border border-white/10 p-8 space-y-8 shadow-[0_50px_100px_-20px_rgba(0,0,0,1)]">
+                <header className="space-y-2">
+                    <h3 className="text-2xl font-black text-white tracking-tighter uppercase">Enviar Documento</h3>
+                    <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Protocolo de Envio WhatsApp</p>
+                </header>
+                <div className="space-y-6">
+                    <InputGroup label="Número do WhatsApp (DDD + Número)" value={whatsAppRecipientPhone} onChange={e => setWhatsAppRecipientPhone(e.target.value)} placeholder="Ex: 11988887777" />
+                    
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Link do PDF</label>
+                        <div className="flex gap-2">
+                            <input readOnly value={data.pdfUrl || ''} className="flex-1 px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-[11px] text-blue-400 font-mono focus:outline-none" />
+                            <button onClick={handleCopyLink} className="p-3 bg-white/5 border border-white/10 rounded-xl hover:bg-white/10 transition-all text-blue-400 flex items-center justify-center min-w-[44px]">
+                                {linkCopied ? (
+                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="4" className="text-emerald-400 animate-in zoom-in"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                ) : (
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                                )}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div className="flex flex-col gap-3">
+                    <button onClick={handleSendWhatsAppFinal} className="w-full py-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase text-[11px] tracking-widest rounded-2xl shadow-xl shadow-emerald-600/20 active:scale-95 transition-all">Abrir WhatsApp</button>
+                    <button onClick={() => setIsWhatsAppModalOpen(false)} className="w-full py-4 text-slate-500 font-black uppercase text-[10px] tracking-widest hover:text-white transition-all">Cancelar</button>
+                </div>
+            </div>
+        </div>
+      )}
+
       <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4">
         {toasts.map(t => (
           <div key={t.id} className={`px-6 py-4 rounded-2xl border backdrop-blur-3xl shadow-2xl animate-in slide-in-from-right-10 ${t.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
@@ -706,159 +773,186 @@ const App: React.FC = () => {
           <header className="space-y-4">
             <div className="w-24 h-24 bg-blue-600 rounded-[2.5rem] mx-auto flex items-center justify-center text-5xl font-black shadow-2xl shadow-blue-600/30">N</div>
             <h1 className="text-7xl font-black tracking-tighter">NovaInvoice</h1>
-            <p className="text-slate-500 font-bold uppercase tracking-[0.4em] text-[10px]">Gestão Fiscal e Financeira MEI</p>
+            <p className="text-slate-500 font-bold uppercase tracking-[0.4em] text-[10px]">Ecossistema Financeiro MEI</p>
           </header>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 w-full max-w-5xl">
-            <button onClick={() => { setData({ ...INITIAL_DATA, provider: data.provider, branding: data.branding }); setCurrentInvoiceId(null); setView('editor'); setEditorActiveTab('form'); }} className="p-10 bg-white/5 border border-white/10 rounded-[3rem] text-left group hover:border-blue-500/50 transition-all shadow-2xl">
-              <div className="w-14 h-14 bg-white/5 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-blue-600 transition-all"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
-              <h3 className="text-2xl font-black mb-1 uppercase tracking-tight text-white">Nova Emissão</h3>
-              <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Recibos Premium</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 w-full max-w-6xl">
+            <button onClick={() => { setData({ ...INITIAL_DATA, provider: data.provider, branding: data.branding }); setCurrentInvoiceId(null); setView('editor'); }} className="p-8 bg-white/5 border border-white/10 rounded-[2.5rem] text-left group hover:border-blue-500/50 transition-all shadow-xl">
+              <div className="w-12 h-12 bg-white/5 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-blue-600 transition-all"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg></div>
+              <h3 className="text-xl font-black uppercase text-white">Nova Emissão</h3>
+              <p className="text-slate-500 text-[9px] font-bold uppercase tracking-widest">Recibos Premium</p>
             </button>
-            <button onClick={() => setView('history')} className="p-10 bg-white/5 border border-white/10 rounded-[3rem] text-left group hover:border-blue-500/50 transition-all shadow-2xl">
-              <div className="w-14 h-14 bg-white/5 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-blue-600 transition-all"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg></div>
-              <h3 className="text-2xl font-black mb-1 uppercase tracking-tight text-white">Histórico</h3>
-              <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Armazenamento em Nuvem</p>
+            <button onClick={() => setView('history')} className="p-8 bg-white/5 border border-white/10 rounded-[2.5rem] text-left group hover:border-blue-500/50 transition-all shadow-xl">
+              <div className="w-12 h-12 bg-white/5 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-blue-600 transition-all"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg></div>
+              <h3 className="text-xl font-black uppercase text-white">Histórico</h3>
+              <p className="text-slate-500 text-[9px] font-bold uppercase tracking-widest">Gestão de Recebíveis</p>
             </button>
-            <button onClick={() => setView('financial-hub')} className="p-10 bg-emerald-600/5 border border-emerald-600/10 rounded-[3rem] text-left group hover:border-emerald-600/50 transition-all shadow-2xl">
-              <div className="w-14 h-14 bg-emerald-600/10 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-emerald-600 transition-all text-emerald-500 group-hover:text-white"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg></div>
-              <h3 className="text-2xl font-black mb-1 uppercase tracking-tight text-emerald-400">Hub Financeiro</h3>
-              <p className="text-emerald-900 text-[10px] font-bold uppercase tracking-widest">Monitor DAS & Gastos</p>
+            <button onClick={() => setView('financial-hub')} className="p-8 bg-emerald-600/5 border border-emerald-600/10 rounded-[2.5rem] text-left group hover:border-emerald-600/50 transition-all shadow-xl">
+              <div className="w-12 h-12 bg-emerald-600/10 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-emerald-600 transition-all text-emerald-500 group-hover:text-white"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"></rect><line x1="1" y1="10" x2="23" y2="10"></line></svg></div>
+              <h3 className="text-xl font-black uppercase text-emerald-400">Hub Financeiro</h3>
+              <p className="text-emerald-900 text-[9px] font-bold uppercase tracking-widest">Fluxo de Caixa</p>
+            </button>
+            <button onClick={() => setView('contracts')} className="p-8 bg-indigo-600/5 border border-indigo-600/10 rounded-[2.5rem] text-left group hover:border-indigo-600/50 transition-all shadow-xl">
+              <div className="w-12 h-12 bg-indigo-600/10 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-indigo-600 transition-all text-indigo-400 group-hover:text-white"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></div>
+              <h3 className="text-xl font-black uppercase text-indigo-400">Contratos</h3>
+              <p className="text-indigo-900 text-[9px] font-bold uppercase tracking-widest">Express Jurídico</p>
             </button>
           </div>
         </div>
       ) : view === 'history' ? (
-        <div className="p-4 md:p-16 max-w-6xl mx-auto space-y-8 md:space-y-12 animate-in fade-in duration-500 pb-32">
-           <header className="flex flex-col md:flex-row justify-between md:items-end gap-6">
+        <div className="p-6 md:p-16 max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500">
+           <header className="flex flex-col md:flex-row justify-between items-end gap-6">
              <div>
-               <button onClick={() => setView('landing')} className="text-blue-500 text-[10px] font-black uppercase tracking-widest mb-4 hover:translate-x-[-4px] transition-transform flex items-center gap-1">← Voltar</button>
-               <h1 className="text-4xl md:text-6xl font-black tracking-tighter text-white">Histórico Cloud</h1>
+               <button onClick={() => setView('landing')} className="text-blue-500 text-[10px] font-black uppercase tracking-widest mb-4 hover:translate-x-[-4px] transition-transform">← Voltar</button>
+               <h1 className="text-5xl font-black tracking-tighter text-white">Histórico Cloud</h1>
              </div>
-             <div className="bg-white/5 p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] border border-white/10 md:text-right shadow-2xl w-full md:w-auto md:min-w-[320px]">
-               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest block mb-2">Monitor Teto MEI Anual</span>
-               <div className="flex justify-between items-end mb-4">
-                 <p className="text-2xl md:text-3xl font-black text-white">{formatCurrency(dashboardMetrics.totalAnnual)}</p>
-                 <p className="text-lg md:text-xl font-black text-blue-500">{Math.round(dashboardMetrics.progress)}%</p>
-               </div>
-               <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden border border-white/5"><div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: `${dashboardMetrics.progress}%` }}></div></div>
+             <div className="bg-white/5 p-6 rounded-3xl border border-white/10 flex gap-2">
+                {(['all', 'pending', 'paid'] as const).map(s => (
+                  <button key={s} onClick={() => setFilterStatus(s)} className={`px-5 py-2 rounded-2xl text-[9px] font-black uppercase tracking-widest transition-all ${filterStatus === s ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}>{s === 'all' ? 'Todos' : s === 'pending' ? 'Pendentes' : 'Pagos'}</button>
+                ))}
              </div>
            </header>
-
-           {/* History Toolbelt / Filters */}
-           <section className="bg-white/5 backdrop-blur-3xl p-6 md:p-8 rounded-[2.5rem] md:rounded-[3.5rem] border border-white/10 shadow-xl flex flex-col md:flex-row gap-6 md:items-center">
+           
+           <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 shadow-xl flex flex-col md:flex-row gap-6">
              <div className="flex-1 relative">
-               <input 
-                 type="text" 
-                 value={filterSearch}
-                 onChange={e => setFilterSearch(e.target.value)}
-                 placeholder="Buscar cliente ou número..." 
-                 className="w-full pl-14 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-sm focus:outline-none focus:border-blue-500/50 transition-all placeholder:text-slate-600"
-               />
-               <svg className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+               <input type="text" value={filterSearch} onChange={e => setFilterSearch(e.target.value)} placeholder="Pesquisar..." className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500/50" />
+               <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" cy1="21" x2="16.65" y2="16.65"></line></svg>
              </div>
-             
-             <div className="flex bg-white/5 p-1.5 rounded-2xl border border-white/10 shrink-0">
-               {(['all', 'service', 'product'] as const).map(cat => (
-                 <button 
-                   key={cat}
-                   onClick={() => setFilterCategory(cat)}
-                   className={`px-5 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${filterCategory === cat ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
-                 >
-                   {cat === 'all' ? 'Todos' : cat === 'service' ? 'Serviços' : 'Produtos'}
-                 </button>
-               ))}
-             </div>
-
-             <div className="flex flex-col gap-1.5 shrink-0">
-               <input 
-                 type="month" 
-                 value={filterMonth}
-                 onChange={e => setFilterMonth(e.target.value)}
-                 className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase tracking-widest outline-none focus:border-blue-500/50 transition-all cursor-pointer"
-               />
-             </div>
-             
-             {(filterSearch || filterCategory !== 'all' || filterMonth) && (
-               <button 
-                onClick={() => { setFilterSearch(''); setFilterCategory('all'); setFilterMonth(''); }}
-                className="text-[9px] font-black text-rose-500 uppercase tracking-widest hover:text-rose-400 transition-colors"
-               >
-                 Limpar Filtros
-               </button>
-             )}
+             <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none" />
            </section>
 
            <div className="space-y-4">
-              {filteredHistory.length === 0 ? (
-                <div className="text-center py-20 md:py-40 border border-dashed border-white/10 rounded-[2rem] md:rounded-[3rem] flex flex-col items-center gap-4">
-                  <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center text-slate-700">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+              {filteredHistory.map(item => (
+                <div key={item.id} className="p-6 md:p-8 bg-white/5 border border-white/10 rounded-[2.5rem] flex flex-col md:flex-row items-center group gap-6">
+                  <div className="w-14 h-14 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all uppercase text-[10px]">
+                    {item.status === 'paid' ? '✅' : '⏳'}
                   </div>
-                  <p className="text-slate-700 font-black uppercase tracking-widest text-xs">Nenhum documento encontrado com estes filtros</p>
-                </div>
-              ) : filteredHistory.map(item => (
-                <div key={item.id} className="p-5 md:p-8 bg-white/5 border border-white/10 rounded-[2rem] md:rounded-[3rem] flex flex-col md:flex-row items-center group hover:bg-white/[0.08] transition-all shadow-xl gap-6 md:gap-8">
-                  <div className="w-12 h-12 md:w-16 md:h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all uppercase text-[10px] shrink-0">
-                    {item.category === 'product' ? '📦' : '⚡'}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-black text-white text-lg md:text-2xl uppercase tracking-tight truncate">
-                      {item.clientName || 'Cliente não identificado'}
-                    </h4>
-                    <p className="text-[9px] md:text-[10px] font-bold text-slate-500 uppercase tracking-[0.2em] mt-1 md:mt-1.5 flex items-center gap-2">
-                      Doc #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}
-                    </p>
-                  </div>
-                  <div className="flex items-center justify-between md:justify-end gap-6 md:gap-10 w-full md:w-auto pt-4 md:pt-0 border-t border-white/5 md:border-0 shrink-0">
-                    <div className="md:text-right">
-                      <span className="text-xl md:text-2xl font-black text-white block tracking-tighter">
-                        {formatCurrency(item.totalValue)}
-                      </span>
+                  <div className="flex-1">
+                    <h4 className="font-black text-white text-xl uppercase tracking-tight">{item.clientName}</h4>
+                    <div className="flex items-center gap-4 mt-1">
+                      <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">#{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}</p>
+                      <button onClick={() => togglePaymentStatus(item)} className={`px-2 py-0.5 rounded text-[8px] font-black uppercase border ${item.status === 'paid' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'}`}>{item.status === 'paid' ? 'Pago' : 'Pendente'}</button>
                     </div>
-                    <div className="flex gap-2 shrink-0">
-                       <button onClick={() => { setData(item.data); setCurrentInvoiceId(item.id); setView('editor'); setEditorActiveTab('form'); }} className="px-4 py-3 md:px-6 md:py-4 bg-white/5 text-slate-400 rounded-xl md:rounded-2xl text-[9px] md:text-[10px] font-black uppercase tracking-widest border border-white/10 hover:text-white transition-all">Abrir</button>
-                       {item.pdfUrl && <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="p-3 md:p-4 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-xl md:rounded-2xl hover:bg-blue-500 hover:text-white transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></a>}
+                  </div>
+                  <div className="flex items-center gap-6 w-full md:w-auto">
+                    <span className="text-2xl font-black text-white">{formatCurrency(item.totalValue)}</span>
+                    <div className="flex gap-2">
+                       {(item.pdfUrl || item.status === 'pending') && (
+                         <button onClick={() => handleOpenWhatsAppModalFromHistory(item)} className="p-3 bg-emerald-600/10 text-emerald-500 border border-emerald-600/20 rounded-2xl hover:bg-emerald-600 hover:text-white transition-all shadow-lg" title="Enviar via WhatsApp">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                              <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                            </svg>
+                         </button>
+                       )}
+                       <button onClick={() => { setData(item.data); setCurrentInvoiceId(item.id); setView('editor'); }} className="px-5 py-3 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-black uppercase hover:text-white transition-all">Abrir</button>
+                       {item.pdfUrl && <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="p-3 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-2xl hover:bg-blue-500 hover:text-white transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></a>}
                     </div>
                   </div>
                 </div>
               ))}
            </div>
         </div>
+      ) : view === 'contracts' ? (
+        <div className="flex flex-col lg:flex-row h-screen animate-in fade-in duration-500">
+           <aside className="w-full lg:w-[450px] bg-[#0f172a] border-r border-white/10 p-8 space-y-8 overflow-y-auto no-print">
+              <button onClick={() => setView('landing')} className="text-indigo-400 text-[10px] font-black uppercase mb-4">← Voltar</button>
+              <h2 className="text-3xl font-black text-white tracking-tighter">Novo Contrato</h2>
+              <section className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Template do Documento</label>
+                  <select value={contractForm.templateId} onChange={e => setContractForm({...contractForm, templateId: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white appearance-none outline-none focus:border-indigo-500/50">
+                    {CONTRACT_TEMPLATES.map(t => <option key={t.id} value={t.id} className="bg-[#0f172a]">{t.title}</option>)}
+                  </select>
+                </div>
+                <div className="p-6 bg-white/5 border border-white/10 rounded-3xl space-y-4">
+                  <div className="flex justify-between items-center"><span className="text-[10px] font-black text-slate-500 uppercase">Cliente (CONTRATANTE)</span><button onClick={() => setIsContractClientModalOpen(true)} className="px-3 py-1 bg-indigo-500/20 text-indigo-400 rounded-lg text-[8px] font-black uppercase">Selecionar</button></div>
+                  <p className="text-xs font-bold text-white uppercase">{contractClient?.name || 'Não selecionado'}</p>
+                </div>
+                <InputGroup label="Objeto do Serviço" value={contractForm.serviceDesc} onChange={e => setContractForm({...contractForm, serviceDesc: e.target.value})} placeholder="Ex: Desenvolvimento de Web App" isTextArea />
+                <div className="grid grid-cols-2 gap-4">
+                  <InputGroup label="Valor R$" type="number" value={contractForm.value} onChange={e => setContractForm({...contractForm, value: e.target.value})} />
+                  <InputGroup label="Prazo (Dias)" type="number" value={contractForm.deadline} onChange={e => setContractForm({...contractForm, deadline: e.target.value})} />
+                </div>
+                <InputGroup label="Forma de Pagamento" value={contractForm.paymentMethod} onChange={e => setContractForm({...contractForm, paymentMethod: e.target.value})} placeholder="Ex: PIX ou Transferência" />
+              </section>
+              <button disabled={isEmitting} onClick={handleGenerateContract} className="w-full py-6 bg-indigo-600 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl shadow-indigo-600/20 active:scale-95 transition-all">{isEmitting ? 'Gerando...' : 'Gerar Contrato PDF'}</button>
+           </aside>
+           <main className="flex-1 bg-[#020617] p-10 flex justify-center items-start overflow-y-auto overflow-x-hidden">
+              <div ref={contractRef} className="w-[800px] bg-white p-20 text-slate-900 border-[1.5px] border-black shadow-2xl origin-top scale-[0.6] sm:scale-[0.8] lg:scale-100 transition-all">
+                <div className="whitespace-pre-wrap font-serif text-sm leading-relaxed text-justify">
+                  {parseContractTemplate(CONTRACT_TEMPLATES.find(t => t.id === contractForm.templateId)?.content || '')}
+                </div>
+              </div>
+           </main>
+           <ClientSearchModal isOpen={isContractClientModalOpen} onClose={() => setIsContractClientModalOpen(false)} clients={savedClients} onSelect={c => { setContractClient(c); setIsContractClientModalOpen(false); }} onDelete={async tid => { await supabase.from('clients').delete().match({ user_id: session.user.id, tax_id: tid }); loadClients(); }} />
+        </div>
       ) : view === 'financial-hub' ? (
-        <div className="p-6 md:p-16 max-w-5xl mx-auto space-y-12 animate-in fade-in duration-500">
-          <header className="flex justify-between items-end flex-wrap gap-6">
+        <div className="p-6 md:p-16 max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500">
+           <header className="flex justify-between items-end flex-wrap gap-6">
             <div>
               <button onClick={() => setView('landing')} className="text-emerald-500 text-[10px] font-black uppercase tracking-widest mb-4 hover:translate-x-[-4px] transition-transform">← Voltar</button>
               <h1 className="text-6xl font-black tracking-tighter text-white">Hub Financeiro</h1>
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Gestão de DAS e Despesas Isentas</p>
             </div>
             <div className="flex bg-white/5 p-2 rounded-3xl border border-white/10 shadow-lg overflow-x-auto">
-               <button onClick={() => setFinancialTab('das')} className={`px-6 md:px-8 py-3 md:py-4 text-[9px] md:text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all whitespace-nowrap ${financialTab === 'das' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Monitor DAS</button>
-               <button onClick={() => setFinancialTab('expenses')} className={`px-6 md:px-8 py-3 md:py-4 text-[9px] md:text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all whitespace-nowrap ${financialTab === 'expenses' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Despesas</button>
-               <button onClick={() => setFinancialTab('analytics')} className={`px-6 md:px-8 py-3 md:py-4 text-[9px] md:text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all whitespace-nowrap ${financialTab === 'analytics' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Análise & Exportação</button>
+               {(['das', 'expenses', 'analytics', 'crm'] as const).map(tab => (
+                 <button key={tab} onClick={() => setFinancialTab(tab)} className={`px-6 py-3 text-[9px] font-black uppercase tracking-widest rounded-2xl transition-all whitespace-nowrap ${financialTab === tab ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>
+                   {tab === 'das' ? 'Monitor DAS' : tab === 'expenses' ? 'Despesas' : tab === 'analytics' ? 'Análise' : 'Relacionamento'}
+                 </button>
+               ))}
             </div>
           </header>
 
-          <section>
-            {renderFilterStatus()}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-                <div className="bg-emerald-600/10 border border-emerald-600/20 p-10 rounded-[3rem] text-center space-y-2 shadow-2xl">
-                <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Lucro Real Estimado</span>
-                <p className="text-4xl font-black text-white tracking-tighter">{formatCurrency(dashboardMetrics.lucroReal)}</p>
-                <p className="text-[9px] text-emerald-800 font-bold uppercase">Base Isenta de IRPF</p>
-                </div>
-                <div className="bg-white/5 border border-white/10 p-10 rounded-[3rem] text-center space-y-2 shadow-xl">
-                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Faturamento Bruto</span>
-                <p className="text-3xl font-black text-white">{formatCurrency(dashboardMetrics.faturamentoBruto)}</p>
-                </div>
-                <div className="bg-white/5 border border-white/10 p-10 rounded-[3rem] text-center space-y-2 shadow-xl">
-                <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">Custo Operacional</span>
-                <p className="text-3xl font-black text-rose-500">{formatCurrency(dashboardMetrics.custoOperacional)}</p>
-                </div>
-            </div>
-          </section>
+          <section>{renderFilterStatus()}</section>
 
-          {financialTab === 'das' ? (
-            <div className="bg-white/5 border border-white/10 p-12 rounded-[4rem] space-y-12 shadow-2xl">
+          {financialTab === 'crm' ? (
+            <div className="space-y-12 animate-in slide-in-from-bottom-4">
+               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                  <div className="bg-white/5 border border-white/10 p-10 rounded-[3.5rem] space-y-8 shadow-2xl">
+                    <header>
+                      <h3 className="text-2xl font-black text-white tracking-tight uppercase">Top 5 Clientes</h3>
+                      <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Ranking por Faturamento Bruto</p>
+                    </header>
+                    <div className="space-y-4">
+                      {dashboardMetrics.crm.topClients.map((c, i) => (
+                        <div key={c.name} className="p-6 bg-white/[0.03] border border-white/5 rounded-3xl flex items-center justify-between">
+                          <div className="flex items-center gap-4">
+                            <span className="w-8 h-8 rounded-full bg-blue-600/20 text-blue-400 flex items-center justify-center font-black text-xs">#{i+1}</span>
+                            <span className="font-bold text-white uppercase text-sm truncate max-w-[150px]">{c.name}</span>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-lg font-black text-white block">{formatCurrency(c.total)}</span>
+                            <span className="text-[8px] font-black text-slate-500 uppercase">{c.count} Documentos</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="bg-rose-500/5 border border-rose-500/10 p-10 rounded-[3.5rem] space-y-8 shadow-2xl">
+                    <header>
+                      <h3 className="text-2xl font-black text-white tracking-tight uppercase">Clientes Sumidos</h3>
+                      <p className="text-[10px] text-rose-500/60 font-bold uppercase tracking-widest mt-1">Inativos há mais de 60 dias</p>
+                    </header>
+                    <div className="space-y-4">
+                      {dashboardMetrics.crm.inactiveClients.length === 0 ? (
+                        <p className="text-slate-600 text-xs font-medium text-center py-20 uppercase tracking-widest">Todos os clientes estão ativos! 🎉</p>
+                      ) : dashboardMetrics.crm.inactiveClients.map((c) => (
+                        <div key={c.name} className="p-6 bg-white/[0.03] border border-white/5 rounded-3xl flex items-center justify-between group">
+                          <div className="flex items-center gap-4">
+                            <span className="text-2xl">💤</span>
+                            <span className="font-bold text-white uppercase text-sm">{c.name}</span>
+                          </div>
+                          <button onClick={() => {
+                            const phone = savedClients.find(sc => sc.name === c.name)?.whatsapp || '';
+                            window.open(`https://api.whatsapp.com/send?phone=55${phone.replace(/\D/g, '')}&text=${encodeURIComponent(`Olá ${c.name}! Tudo bem? Sentimos sua falta. Tem algum novo projeto que possamos ajudar?`)}`, '_blank');
+                          }} className="px-4 py-2 bg-rose-500/10 text-rose-500 border border-rose-500/20 rounded-xl text-[9px] font-black uppercase hover:bg-rose-500 hover:text-white transition-all">Reativar</button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+               </div>
+            </div>
+          ) : financialTab === 'das' ? (
+             <div className="bg-white/5 border border-white/10 p-12 rounded-[4rem] space-y-12 shadow-2xl">
               <header className="flex flex-col md:flex-row justify-between items-center gap-6">
                  <div>
                    <h3 className="text-2xl font-black uppercase tracking-tight text-white">Contribuições {new Date().getFullYear()}</h3>
@@ -888,218 +982,88 @@ const App: React.FC = () => {
                <div className="lg:col-span-1">
                  <form onSubmit={handleAddExpense} className="bg-white/5 border border-white/10 p-10 rounded-[3rem] space-y-8 shadow-2xl sticky top-8">
                     <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Registrar Gasto</h3>
-                    <InputGroup label="O que adquiriu?" value={expenseForm.description} onChange={e => setExpenseForm({...expenseForm, description: e.target.value})} placeholder="Ex: Internet Vivo" />
-                    <InputGroup label="Valor Pago R$" type="number" value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} />
-                    <div className="space-y-2">
-                       <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">Categoria de Custo</label>
-                       <select value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white outline-none focus:border-emerald-500/50 appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%22%20fill%3D%22none%22%20stroke%3D%22%23475569%22%20stroke-width%3D%223%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C/polyline%3E%3C/svg%3E')] bg-[length:18px_18px] bg-[right_1rem_center] bg-no-repeat">
-                          {EXPENSE_CATEGORIES.map(c => <option key={c.name} value={c.name} className="bg-[#0f172a]">{c.name}</option>)}
-                       </select>
+                    <InputGroup label="O que adquiriu?" value={expenseForm.description} onChange={e => setExpenseForm({...expenseForm, description: e.target.value})} />
+                    <InputGroup label="Valor R$" type="number" value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} />
+                    <select value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white outline-none">
+                      {EXPENSE_CATEGORIES.map(c => <option key={c.name} value={c.name} className="bg-[#0f172a]">{c.name}</option>)}
+                    </select>
+                    <div className="space-y-3">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Status do Pagamento</label>
+                      <div className="grid grid-cols-2 gap-3">
+                         <button type="button" onClick={() => setExpenseForm(prev => ({ ...prev, status: 'paid' }))} className={`py-4 rounded-[1.5rem] border font-black text-[10px] uppercase tracking-widest transition-all ${expenseForm.status === 'paid' ? 'bg-emerald-600 border-emerald-500 shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Pago</button>
+                         <button type="button" onClick={() => setExpenseForm(prev => ({ ...prev, status: 'pending' }))} className={`py-4 rounded-[1.5rem] border font-black text-[10px] uppercase tracking-widest transition-all ${expenseForm.status === 'pending' ? 'bg-rose-600 border-rose-500 shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Pendente</button>
+                      </div>
                     </div>
-                    <InputGroup label="Data do Gasto" type="date" value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} />
-                    <button type="submit" className="w-full py-5 bg-emerald-600 rounded-2xl text-white font-black uppercase text-[10px] tracking-widest shadow-xl shadow-emerald-600/20 active:scale-95 transition-all">Adicionar Saída</button>
+                    <InputGroup label="Data" type="date" value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} />
+                    <button type="submit" className="w-full py-5 bg-emerald-600 rounded-2xl text-white font-black uppercase text-[10px] tracking-widest">Adicionar Saída</button>
                  </form>
                </div>
-               
-               <div className="lg:col-span-2 space-y-6">
-                  {/* Expense Filter Toolbelt - BENTO GRID DESIGN */}
-                  <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 shadow-lg space-y-8">
-                    <header className="flex flex-col md:flex-row justify-between md:items-center gap-4">
-                      <div className="flex-1 relative">
-                        <input 
-                          type="text" 
-                          value={expFilterSearch}
-                          onChange={e => setExpFilterSearch(e.target.value)}
-                          placeholder="Buscar na listagem..." 
-                          className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-white text-xs outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
-                        />
-                        <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                      </div>
-                      <input 
-                        type="month" 
-                        value={expFilterMonth}
-                        onChange={e => setExpFilterMonth(e.target.value)}
-                        className="px-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase tracking-widest outline-none focus:border-emerald-500/50 transition-all cursor-pointer"
-                      />
-                    </header>
-                    
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                       <button 
-                         onClick={() => setExpFilterCategory('all')}
-                         className={`p-4 rounded-2xl border transition-all text-left flex flex-col justify-between gap-4 group ${expFilterCategory === 'all' ? 'bg-emerald-600 border-emerald-400 text-white shadow-xl shadow-emerald-600/20' : 'bg-white/5 text-slate-500 border-white/5 hover:border-white/10 hover:bg-white/[0.07]'}`}
-                       >
-                         <div className="flex justify-between items-start">
-                           <span className="text-xl">🌟</span>
-                           {expFilterCategory === 'all' && <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></div>}
-                         </div>
-                         <div>
-                           <span className={`text-[9px] font-black uppercase tracking-widest block ${expFilterCategory === 'all' ? 'text-white/80' : 'text-slate-600'}`}>Todos</span>
-                           <span className="text-[11px] font-black truncate">Geral Anual</span>
-                         </div>
-                       </button>
-
-                       {EXPENSE_CATEGORIES.map(cat => (
-                         <button 
-                           key={cat.name}
-                           onClick={() => setExpFilterCategory(cat.name)}
-                           className={`p-4 rounded-2xl border transition-all text-left flex flex-col justify-between gap-4 group ${expFilterCategory === cat.name ? 'bg-emerald-600 border-emerald-400 text-white shadow-xl shadow-emerald-600/20' : 'bg-white/5 text-slate-500 border-white/5 hover:border-white/10 hover:bg-white/[0.07]'}`}
-                         >
-                           <div className="flex justify-between items-start">
-                             <span className="text-xl">{cat.icon}</span>
-                             <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border ${expFilterCategory === cat.name ? 'bg-white/10 border-white/20 text-white' : 'bg-black/20 border-white/5 text-slate-600'}`}>
-                               R$ {Math.round(dashboardMetrics.categoryTotals[cat.name] || 0)}
-                             </span>
-                           </div>
-                           <div>
-                             <span className={`text-[8px] font-black uppercase tracking-widest block mb-0.5 ${expFilterCategory === cat.name ? 'text-white/80' : 'text-slate-600'}`}>Categoria</span>
-                             <span className="text-[10px] font-black truncate leading-tight block">{cat.name}</span>
-                           </div>
-                         </button>
-                       ))}
-                    </div>
-
-                    {(expFilterSearch || expFilterCategory !== 'all' || expFilterMonth) && (
-                      <div className="pt-4 border-t border-white/5 flex justify-end">
-                        <button 
-                          onClick={() => { setExpFilterSearch(''); setExpFilterCategory('all'); setExpFilterMonth(''); }}
-                          className="text-[9px] font-black text-rose-500 uppercase tracking-widest hover:bg-rose-500/10 px-4 py-2 rounded-xl transition-all"
-                        >
-                          Resetar Todos os Filtros
-                        </button>
-                      </div>
-                    )}
-                  </section>
-
-                  <div className="space-y-4">
-                    {filteredExpenses.length === 0 ? (
-                      <div className="h-64 flex flex-col items-center justify-center border border-dashed border-white/5 rounded-[4rem] gap-4">
-                        <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center text-slate-800">
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-                        </div>
-                        <span className="text-slate-800 font-black uppercase tracking-widest text-[10px]">Sem despesas para este filtro</span>
-                      </div>
-                    ) : filteredExpenses.map(e => (
-                      <div key={e.id} className="p-6 md:p-8 bg-white/5 border border-white/10 rounded-[2.5rem] flex items-center justify-between group hover:border-emerald-500/30 transition-all shadow-lg gap-4">
-                        <div className="flex items-center gap-4 md:gap-8 min-w-0">
-                            <div className="w-12 h-12 md:w-14 md:h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 font-black text-[12px] md:text-[14px] shrink-0 text-center leading-tight">
-                                {EXPENSE_CATEGORIES.find(cat => cat.name === e.category)?.icon || "📎"}
-                            </div>
-                            <div className="min-w-0">
-                              <h4 className="font-black text-white text-base md:text-lg uppercase tracking-tight truncate">{e.description}</h4>
-                              <p className="text-[9px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1 md:mt-1.5">{formatDate(e.date)} • {e.category}</p>
-                            </div>
-                        </div>
-                        <div className="flex items-center gap-4 md:gap-8 shrink-0">
-                            <span className="text-xl md:text-2xl font-black text-rose-500 tracking-tighter">{formatCurrency(e.amount)}</span>
-                            <button onClick={() => handleDeleteExpense(e.id)} className="p-2.5 text-slate-800 hover:text-rose-500 md:opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500/10 rounded-xl"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2-2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+               <div className="lg:col-span-2 space-y-4">
+                 {filteredExpenses.map(e => (
+                   <div key={e.id} className="p-6 bg-white/5 border border-white/10 rounded-[2rem] flex items-center justify-between group">
+                      <div className="flex items-center gap-6">
+                        <span className="text-2xl">{EXPENSE_CATEGORIES.find(cat => cat.name === e.category)?.icon || "📎"}</span>
+                        <div>
+                          <div className="flex items-center gap-3">
+                            <h4 className="font-black text-white text-lg uppercase leading-none">{e.description}</h4>
+                            <button onClick={() => toggleExpenseStatus(e)} className={`px-2 py-0.5 rounded text-[8px] font-black uppercase border transition-all ${e.status === 'paid' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'}`}>{e.status === 'paid' ? 'Pago' : 'Pendente'}</button>
+                          </div>
+                          <p className="text-[9px] text-slate-500 uppercase mt-1">{formatDate(e.date)} • {e.category}</p>
                         </div>
                       </div>
-                    ))}
-                  </div>
+                      <div className="flex items-center gap-6"><span className="text-2xl font-black text-rose-500">{formatCurrency(e.amount)}</span><button onClick={() => handleDeleteExpense(e.id)} className="p-2 text-slate-700 hover:text-rose-500 transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2-2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button></div>
+                   </div>
+                 ))}
                </div>
             </div>
           ) : (
-            <div className="space-y-12 animate-in slide-in-from-bottom-4 duration-500">
-                {/* 1. Previsão de Faturamento (Forecasting) */}
+            <div className="space-y-12 animate-in slide-in-from-bottom-4">
                 <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    <div className="lg:col-span-2 bg-blue-600/10 border border-blue-500/20 p-10 md:p-12 rounded-[3.5rem] relative overflow-hidden flex flex-col md:flex-row items-center gap-10 shadow-2xl">
-                        <div className="absolute top-[-20%] right-[-10%] w-64 h-64 bg-blue-500/20 blur-[100px] rounded-full"></div>
-                        <div className="space-y-6 flex-1 text-center md:text-left relative z-10">
-                            <div>
-                                <h3 className="text-2xl font-black text-white tracking-tight uppercase">Previsão Anual de Faturamento</h3>
-                                <p className="text-[10px] text-blue-400 font-bold uppercase tracking-[0.2em] mt-1">Algoritmo de Velocidade de Caixa</p>
-                            </div>
-                            <div className="flex items-end justify-center md:justify-start gap-3">
-                                <span className="text-5xl font-black text-white tracking-tighter">{formatCurrency(dashboardMetrics.forecasting.projectedYearEnd)}</span>
-                                <span className="text-xs font-black text-blue-500 uppercase pb-2">Estimado para Dez/31</span>
-                            </div>
-                            <p className="text-slate-400 text-xs font-medium leading-relaxed max-w-sm">
-                                Com base na sua média mensal de <strong className="text-white">{formatCurrency(dashboardMetrics.forecasting.avgMonthly)}</strong>, este é o valor projetado. 
-                                {dashboardMetrics.forecasting.projectedYearEnd > 81000 ? 
-                                    " ⚠️ Atenção: Risco crítico de ultrapassar o limite MEI." : 
-                                    " ✅ Você está dentro da zona de segurança do MEI."
-                                }
-                            </p>
+                    <div className="lg:col-span-2 bg-blue-600/10 border border-blue-500/20 p-10 rounded-[3.5rem] flex flex-col md:flex-row items-center gap-10">
+                        <div className="space-y-4 flex-1">
+                            <h3 className="text-2xl font-black text-white tracking-tight uppercase">Previsão de Faturamento</h3>
+                            <div className="flex items-end gap-3"><span className="text-5xl font-black text-white tracking-tighter">{formatCurrency(dashboardMetrics.forecasting.projectedYearEnd)}</span><span className="text-[10px] font-black text-blue-500 uppercase pb-2">Est. em Dez/31</span></div>
+                            <p className="text-slate-400 text-xs font-medium">{dashboardMetrics.forecasting.projectedYearEnd > 81000 ? "⚠️ Risco crítico de ultrapassar o teto MEI." : "✅ Projeção segura dentro do teto MEI."}</p>
                         </div>
-                        <div className="shrink-0 text-center space-y-4">
-                            <div className={`w-32 h-32 rounded-full border-8 flex items-center justify-center relative ${dashboardMetrics.forecasting.projectedYearEnd > 81000 ? 'border-rose-500 shadow-rose-500/20' : 'border-blue-500 shadow-blue-500/20'} shadow-2xl transition-all duration-1000`}>
-                                <span className="text-xl font-black text-white">
-                                    {Math.round((dashboardMetrics.forecasting.projectedYearEnd / 81000) * 100)}%
-                                </span>
-                            </div>
-                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest block">Capacidade do Teto</span>
+                        <div className="shrink-0 text-center space-y-2">
+                            <div className={`w-28 h-28 rounded-full border-8 flex items-center justify-center ${dashboardMetrics.forecasting.projectedYearEnd > 81000 ? 'border-rose-500' : 'border-blue-500'} shadow-xl`}><span className="text-xl font-black text-white">{Math.round((dashboardMetrics.forecasting.projectedYearEnd / 81000) * 100)}%</span></div>
+                            <span className="text-[8px] font-black text-slate-500 uppercase">Capacidade</span>
                         </div>
                     </div>
-
-                    <div className="bg-white/5 border border-white/10 p-10 rounded-[3.5rem] flex flex-col justify-center items-center text-center space-y-6 shadow-xl">
-                        <div className="w-16 h-16 bg-white/5 rounded-[1.5rem] flex items-center justify-center text-3xl">📦</div>
-                        <div>
-                            <h3 className="text-xl font-black text-white uppercase tracking-tight">Pack do Contador</h3>
-                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Exportação em Um Clique</p>
-                        </div>
+                    <div className="bg-white/5 border border-white/10 p-10 rounded-[3.5rem] flex flex-col items-center justify-center text-center space-y-6">
+                        <div className="w-12 h-12 bg-white/5 rounded-2xl flex items-center justify-center text-2xl">📦</div>
+                        <h3 className="text-xl font-black text-white uppercase tracking-tight">Pack Contador</h3>
                         <div className="w-full space-y-4">
-                            <input 
-                                type="month" 
-                                value={exportMonth}
-                                onChange={e => setExportMonth(e.target.value)}
-                                className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-[11px] font-black uppercase text-center outline-none focus:border-blue-500/50"
-                            />
-                            <button onClick={handleExportPack} className="w-full py-4 bg-white/10 hover:bg-white/20 border border-white/10 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl transition-all active:scale-95 shadow-lg">
-                                Baixar Arquivo .TXT
-                            </button>
+                            <input type="month" value={exportMonth} onChange={e => setExportMonth(e.target.value)} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-[11px] font-black outline-none text-center" />
+                            <button onClick={handleExportPack} className="w-full py-4 bg-white/10 hover:bg-white/20 border border-white/10 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl transition-all">Baixar .TXT</button>
                         </div>
                     </div>
                 </section>
-
-                {/* 2. Assistente DASN-SIMEI */}
-                <section className="bg-white/5 border border-white/10 p-12 md:p-16 rounded-[4rem] space-y-12 shadow-2xl">
+                <section className="bg-white/5 border border-white/10 p-12 rounded-[4rem] space-y-12">
                     <header className="flex flex-col md:flex-row justify-between items-start gap-6">
-                        <div className="space-y-2">
-                            <h3 className="text-3xl font-black uppercase tracking-tighter text-white">Assistente DASN-SIMEI</h3>
-                            <p className="text-[11px] text-slate-500 font-bold uppercase tracking-[0.3em]">Fechamento Fiscal Anual</p>
-                        </div>
-                        <div className="flex bg-white/5 p-2 rounded-2xl border border-white/10">
-                            {[new Date().getFullYear() - 1, new Date().getFullYear()].map(y => (
-                                <button key={y} onClick={() => setAnalyticsYear(y)} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${analyticsYear === y ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-600 hover:text-white'}`}>
-                                    Ano {y}
-                                </button>
-                            ))}
-                        </div>
+                        <div className="space-y-1"><h3 className="text-3xl font-black uppercase text-white">Assistente DASN-SIMEI</h3><p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest">Fechamento Anual</p></div>
+                        <div className="flex bg-white/5 p-1 rounded-2xl border border-white/10">{[new Date().getFullYear()-1, new Date().getFullYear()].map(y => <button key={y} onClick={() => setAnalyticsYear(y)} className={`px-6 py-2 rounded-xl text-[10px] font-black transition-all ${analyticsYear === y ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-600'}`}>Ano {y}</button>)}</div>
                     </header>
-
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                        <div className="p-10 bg-white/[0.03] border border-white/5 rounded-[3rem] space-y-6 group hover:bg-white/[0.05] transition-all">
-                            <div className="flex justify-between items-start">
-                                <span className="text-4xl">⚡</span>
-                                <button onClick={() => { navigator.clipboard.writeText(dashboardMetrics.dasn.totalServicos.toString()); showToast('Copiado para o clipboard!'); }} className="p-3 bg-white/5 rounded-xl text-slate-500 hover:text-blue-400 hover:bg-blue-400/10 transition-all opacity-0 group-hover:opacity-100"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
-                            </div>
-                            <div>
-                                <h4 className="text-2xl font-black text-white tracking-tight uppercase">Prestação de Serviços</h4>
-                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Valor para declarar no campo específico</p>
-                            </div>
+                        <div className="p-10 bg-white/[0.03] border border-white/5 rounded-[3rem] space-y-4">
+                            <h4 className="text-xl font-black text-white uppercase tracking-tight">Prestação de Serviços</h4>
                             <p className="text-4xl font-black text-blue-500 tracking-tighter">{formatCurrency(dashboardMetrics.dasn.totalServicos)}</p>
                         </div>
-
-                        <div className="p-10 bg-white/[0.03] border border-white/5 rounded-[3rem] space-y-6 group hover:bg-white/[0.05] transition-all">
-                            <div className="flex justify-between items-start">
-                                <span className="text-4xl">📦</span>
-                                <button onClick={() => { navigator.clipboard.writeText(dashboardMetrics.dasn.totalProdutos.toString()); showToast('Copiado para o clipboard!'); }} className="p-3 bg-white/5 rounded-xl text-slate-500 hover:text-emerald-400 hover:bg-emerald-400/10 transition-all opacity-0 group-hover:opacity-100"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
-                            </div>
-                            <div>
-                                <h4 className="text-2xl font-black text-white tracking-tight uppercase">Vendas de Mercadorias</h4>
-                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Valor para o campo de Comércio/Indústria</p>
-                            </div>
+                        <div className="p-10 bg-white/[0.03] border border-white/5 rounded-[3rem] space-y-4">
+                            <h4 className="text-xl font-black text-white uppercase tracking-tight">Vendas / Comércio</h4>
                             <p className="text-4xl font-black text-emerald-500 tracking-tighter">{formatCurrency(dashboardMetrics.dasn.totalProdutos)}</p>
                         </div>
                     </div>
-
-                    <div className="p-8 bg-blue-600/5 border border-blue-500/10 rounded-[2.5rem] flex items-center gap-6">
-                        <div className="w-12 h-12 bg-blue-600/20 rounded-full flex items-center justify-center text-blue-400 shrink-0">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-                        </div>
-                        <p className="text-[11px] font-medium text-slate-400 leading-relaxed uppercase">
-                            <strong>Dica NovaInvoice:</strong> O governo exige que você separe o que foi serviço do que foi venda. Use os valores acima diretamente no portal do Simples Nacional em Maio de cada ano.
-                        </p>
+                </section>
+                <section className="bg-white/5 border border-white/10 p-12 rounded-[4rem] flex flex-col md:flex-row justify-between items-center gap-10">
+                    <div className="space-y-4">
+                        <h3 className="text-3xl font-black uppercase text-white leading-none">Lucro Real Acumulado</h3>
+                        <p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest">Saldo líquido (Faturamento - Despesas Pagas)</p>
+                    </div>
+                    <div className="text-right">
+                        <span className={`text-6xl font-black tracking-tighter ${dashboardMetrics.lucroReal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            {formatCurrency(dashboardMetrics.lucroReal)}
+                        </span>
                     </div>
                 </section>
             </div>
@@ -1107,7 +1071,7 @@ const App: React.FC = () => {
         </div>
       ) : (
         <div className="min-h-screen flex flex-col animate-in fade-in duration-500">
-          <div className="lg:hidden sticky top-0 z-40 bg-[#0f172a]/95 backdrop-blur-xl border-b border-white/10 p-4">
+           <div className="lg:hidden sticky top-0 z-40 bg-[#0f172a]/95 backdrop-blur-xl border-b border-white/10 p-4">
             <div className="flex justify-between items-center mb-4">
                <button onClick={() => setView('landing')} className="text-xl font-black text-blue-500 uppercase tracking-tighter">NovaInvoice</button>
                <div className="flex gap-2">
@@ -1116,23 +1080,13 @@ const App: React.FC = () => {
                </div>
             </div>
             <div className="flex bg-white/5 p-1 rounded-2xl border border-white/10">
-              <button 
-                onClick={() => setEditorActiveTab('form')} 
-                className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${editorActiveTab === 'form' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}
-              >
-                Editor
-              </button>
-              <button 
-                onClick={() => setEditorActiveTab('preview')} 
-                className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${editorActiveTab === 'preview' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}
-              >
-                Documento
-              </button>
+              <button onClick={() => setEditorActiveTab('form')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${editorActiveTab === 'form' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>Editor</button>
+              <button onClick={() => setEditorActiveTab('preview')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${editorActiveTab === 'preview' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>Documento</button>
             </div>
           </div>
 
           <div className="flex flex-col lg:flex-row flex-1 relative">
-            <aside className={`w-full lg:w-[500px] bg-[#0f172a]/90 backdrop-blur-3xl border-r border-white/10 p-6 md:p-10 space-y-12 overflow-y-auto lg:h-screen scrollbar-hide no-print ${editorActiveTab === 'preview' ? 'hidden lg:block' : 'block'}`}>
+            <aside ref={sidebarRef} className={`w-full lg:w-[500px] bg-[#0f172a]/90 backdrop-blur-3xl border-r border-white/10 p-6 md:p-10 space-y-12 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#0f172a] ${editorActiveTab === 'preview' ? 'hidden lg:block' : 'block'}`}>
               <header className="hidden lg:flex justify-between items-center mb-6">
                  <button onClick={() => setView('landing')} className="text-3xl font-black text-blue-500 uppercase tracking-tighter">NovaInvoice</button>
                  <div className="flex gap-2">
@@ -1141,7 +1095,7 @@ const App: React.FC = () => {
                  </div>
               </header>
 
-              <div className="space-y-12 pb-24 lg:pb-0">
+              <div className="space-y-12 pb-24">
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Identidade Visual</h3>
                    <div className="space-y-8">
@@ -1240,122 +1194,77 @@ const App: React.FC = () => {
                    </div>
                 </section>
 
+                <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-6 shadow-2xl">
+                   <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Observações</h3>
+                   <InputGroup label="Informações Adicionais" value={data.notes} onChange={e => setData(prev => ({ ...prev, notes: e.target.value }))} isTextArea />
+                </section>
+
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Configurações de Envio</h3>
                    <div className="space-y-4">
                       <div className="flex flex-col gap-2.5">
                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Mensagem WhatsApp</label>
-                        <textarea 
-                          ref={whatsappTextAreaRef}
-                          rows={4}
-                          value={data.whatsappMessage || ''}
-                          onChange={e => setData(prev => ({ ...prev, whatsappMessage: e.target.value }))}
-                          placeholder="Olá {{cliente}}..."
-                          className="w-full px-4 py-4 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white placeholder:text-slate-700 focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all"
-                        />
+                        <textarea ref={whatsappTextAreaRef} rows={4} value={data.whatsappMessage || ''} onChange={e => setData(prev => ({ ...prev, whatsappMessage: e.target.value }))} placeholder="Olá {{cliente}}..." className="w-full px-4 py-4 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white placeholder:text-slate-700 focus:outline-none focus:border-blue-500/50 transition-all" />
                       </div>
                       <div className="flex flex-wrap gap-2 pt-2">
                         {WHATSAPP_TAGS.map(item => (
-                          <button 
-                            key={item.tag} 
-                            onClick={() => insertTag(item.tag)}
-                            className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-[9px] font-black uppercase text-blue-400 tracking-widest transition-all active:scale-90"
-                          >
-                            {item.label}
-                          </button>
+                          <button key={item.tag} onClick={() => {
+                            const textarea = whatsappTextAreaRef.current;
+                            if (!textarea) return;
+                            const start = textarea.selectionStart;
+                            const end = textarea.selectionEnd;
+                            const newText = (data.whatsappMessage || '').substring(0, start) + item.tag + (data.whatsappMessage || '').substring(end);
+                            setData(prev => ({ ...prev, whatsappMessage: newText }));
+                          }} className="px-3 py-1.5 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 rounded-lg text-[9px] font-black uppercase text-blue-400 tracking-widest transition-all">{item.label}</button>
                         ))}
                       </div>
-                      <p className="text-[9px] text-slate-600 font-medium uppercase mt-2">Clique nas tags acima para inserir no texto.</p>
                    </div>
                 </section>
 
-                <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 shadow-2xl">
-                   <InputGroup label="Observações no Documento" isTextArea value={data.notes} onChange={e => setData(prev => ({ ...prev, notes: e.target.value }))} />
-                </section>
+                {/* Botão Subir ao Topo no final do fluxo do formulário */}
+                <button 
+                    onClick={scrollToTop}
+                    className="w-full py-6 mt-4 text-slate-500 font-black uppercase text-[11px] tracking-[0.3em] hover:text-white transition-all flex items-center justify-center gap-3 bg-white/5 rounded-[2.5rem] border border-white/5 hover:border-white/20 shadow-xl"
+                >
+                    <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="18 15 12 9 6 15"></polyline></svg>
+                    </div>
+                    Subir ao Topo
+                </button>
 
-                <div className="sticky bottom-0 bg-[#020617]/95 pt-10 pb-16 border-t border-white/10 z-30 lg:block hidden">
-                   <button disabled={isEmitting} onClick={handlePrint} className={`w-full py-8 rounded-[3rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'}`}>{isEmitting ? 'Gerando...' : 'Gerar PDF Premium'}</button>
+                <div className="sticky bottom-0 bg-[#0f172a]/95 pt-10 pb-16 border-t border-white/10 z-30 lg:block hidden">
+                   <div className="flex flex-col gap-4">
+                        <button 
+                            disabled={!data.pdfUrl} 
+                            onClick={() => setIsWhatsAppModalOpen(true)} 
+                            className={`w-full py-5 rounded-[2.5rem] text-white font-black uppercase text-[10px] tracking-widest transition-all flex items-center justify-center gap-3 ${!data.pdfUrl ? 'bg-slate-800 text-slate-600' : 'bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/20 active:scale-95'}`}
+                        >
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+                                <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
+                            </svg>
+                            {data.pdfUrl ? 'Enviar p/ WhatsApp' : 'Gere o PDF para Enviar'}
+                        </button>
+                        <button 
+                            disabled={isEmitting} 
+                            onClick={handlePrint} 
+                            className={`w-full py-8 rounded-[3rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'}`}
+                        >
+                            {isEmitting ? 'Gerando...' : 'Gerar PDF Premium'}
+                        </button>
+                   </div>
                 </div>
               </div>
             </aside>
-            
-            {/* Editor Preview Area */}
-            <main className={`flex-1 flex flex-col items-center lg:items-start justify-start lg:justify-start p-4 sm:p-10 lg:p-12 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#020617] transition-all duration-300 ${editorActiveTab === 'form' ? 'hidden lg:flex' : 'flex'}`}>
-              <div className="hidden lg:flex w-full max-w-[900px] justify-between items-center mb-10 mx-auto gap-8">
-                 <div className="px-6 py-3 bg-blue-600/10 border border-blue-600/20 text-blue-500 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shrink-0">Real-time Preview</div>
-                 
-                 {data.pdfUrl && (
-                   <div className="flex-1 flex gap-3 animate-in slide-in-from-top-4 duration-500">
-                     <div className="w-full flex bg-emerald-600/10 border border-emerald-600/20 p-2.5 rounded-2xl items-center gap-3 shadow-xl backdrop-blur-md">
-                        <div className="flex flex-col px-3 border-r border-emerald-500/20">
-                          <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">Enviar p/ Whatsapp:</span>
-                          <input 
-                            value={whatsOverridePhone} 
-                            onChange={e => setWhatsOverridePhone(e.target.value)}
-                            placeholder="(00) 00000-0000"
-                            className="bg-transparent text-[11px] text-white font-bold outline-none w-32 placeholder:text-emerald-900" 
-                          />
-                        </div>
-                        
-                        <div className="flex-1 flex items-center gap-2 bg-white/5 border border-white/5 px-4 py-2 rounded-xl">
-                          <span className="text-[8px] font-black text-slate-500 uppercase">Link:</span>
-                          <input readOnly value={data.pdfUrl} className="bg-transparent border-none text-[9px] text-white outline-none w-full font-mono" />
-                          <button onClick={handleCopyLink} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
-                        </div>
-
-                        <button onClick={handleSendWhatsApp} className="px-5 py-3 bg-emerald-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-emerald-500 transition-all flex items-center gap-2 shrink-0 shadow-lg">
-                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                           Enviar
-                        </button>
-                     </div>
-                   </div>
-                 )}
-              </div>
-
-              {/* Mobile Hub de Compartilhamento */}
-              {data.pdfUrl && (
-                <div className="lg:hidden w-full max-w-[800px] bg-[#0f172a] p-8 rounded-[2.5rem] border border-emerald-500/30 mb-8 flex flex-col gap-6 shadow-2xl animate-in fade-in slide-in-from-bottom-4">
-                  <header className="flex justify-between items-center">
-                    <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Documento Disponível</p>
-                    <button onClick={handleCopyLink} className="flex items-center gap-2 text-[10px] font-black uppercase text-blue-400"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copiar Link</button>
-                  </header>
-                  
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                       <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">WhatsApp de Envio</label>
-                       <input 
-                        type="text" 
-                        value={whatsOverridePhone} 
-                        onChange={e => setWhatsOverridePhone(e.target.value)}
-                        placeholder="(00) 00000-0000"
-                        className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white font-bold"
-                       />
-                    </div>
-                    
-                    <button onClick={handleSendWhatsApp} className="w-full py-5 bg-emerald-600 text-white rounded-2xl flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-emerald-600/20 active:scale-95 transition-all">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                      Enviar pelo WhatsApp
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <div className="w-full flex justify-center items-start lg:pt-10 py-10 min-h-full lg:min-h-0">
+            <main className={`flex-1 flex flex-col items-center lg:items-start p-4 sm:p-10 lg:p-12 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#020617] ${editorActiveTab === 'form' ? 'hidden lg:flex' : 'flex'}`}>
+              <div className="w-full flex justify-center items-start lg:pt-10 py-10">
                 <div className="relative w-[800px] origin-top scale-[0.35] sm:scale-[0.55] md:scale-[0.75] lg:scale-[0.65] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700 mx-auto">
                    <div ref={invoiceRef} className="shadow-[0_80px_160px_-40px_rgba(0,0,0,1)] bg-white"><InvoicePreview data={data} /></div>
                 </div>
-              </div>
-
-              <div className="lg:hidden fixed bottom-6 left-6 right-6 z-50">
-                 <button disabled={isEmitting} onClick={handlePrint} className={`w-full py-6 rounded-[2.5rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 shadow-blue-600/40'}`}>
-                   {isEmitting ? 'Processando...' : 'Gerar Documento Agora'}
-                 </button>
               </div>
             </main>
           </div>
         </div>
       )}
-      
       <ClientSearchModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} clients={savedClients} onSelect={c => { setData({ ...data, client: c }); setIsModalOpen(false); }} onDelete={async tid => { await supabase.from('clients').delete().match({ user_id: session.user.id, tax_id: tid }); loadClients(); }} />
     </div>
   );
