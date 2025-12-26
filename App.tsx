@@ -475,44 +475,56 @@ const App: React.FC = () => {
   const updateClient = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, client: { ...prev.client, [field]: value } }));
 
   if (!session) return (
-    <div className="min-h-screen bg-[#020617] flex flex-col md:flex-row p-6 md:p-12 relative overflow-hidden items-center justify-center gap-10 md:gap-20 animate-in fade-in duration-700">
+    <div className="min-h-screen lg:h-screen bg-[#020617] flex flex-col md:flex-row p-6 md:px-8 lg:p-12 relative overflow-y-auto lg:overflow-hidden items-center justify-center gap-10 md:gap-8 lg:gap-20 animate-in fade-in duration-700">
       <div className="absolute top-[-20%] left-[-10%] w-[70%] h-[70%] bg-blue-600/5 blur-[150px] rounded-full bg-orb pointer-events-none"></div>
-      <div className="w-full max-w-2xl space-y-12 z-10 text-center md:text-left">
+      
+      {/* Hero Section */}
+      <div className="w-full max-w-2xl space-y-6 md:space-y-8 lg:space-y-12 z-10 text-center md:text-left">
         <div className="inline-flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-full">
           <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
           <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Nova Invoice V3.5</span>
         </div>
-        <h1 className="text-6xl md:text-8xl font-black text-white tracking-tighter leading-[0.9]">Faturamento inteligente e <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600">minimalista.</span></h1>
-        <p className="text-slate-400 text-lg md:text-xl font-medium max-w-lg">Gere notas premium para serviços ou produtos e controle seu faturamento MEI de forma automática.</p>
+        <h1 className="text-5xl md:text-6xl lg:text-8xl font-black text-white tracking-tighter leading-[0.95] md:leading-[1] lg:leading-[0.9]">
+          Faturamento inteligente e <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-600">minimalista.</span>
+        </h1>
+        <p className="text-slate-400 text-base md:text-lg lg:text-xl font-medium max-w-lg mx-auto md:mx-0">
+          Gere notas premium para serviços ou produtos e controle seu faturamento MEI de forma automática.
+        </p>
       </div>
+
+      {/* Auth Card Section */}
       <div className="w-full max-w-md z-10">
-        <div className="bg-[#0f172a]/80 backdrop-blur-3xl p-10 md:p-14 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
-          <div className="text-center mb-12">
-            <div className="w-20 h-20 bg-blue-600 rounded-[2rem] mx-auto mb-8 flex items-center justify-center shadow-xl shadow-blue-600/30">
-              <span className="text-white text-4xl font-black">N</span>
+        <div className="bg-[#0f172a]/80 backdrop-blur-3xl p-8 md:p-10 lg:p-14 rounded-[2.5rem] md:rounded-[3rem] lg:rounded-[3.5rem] border border-white/10 shadow-2xl relative">
+          <div className="text-center mb-6 md:mb-8 lg:mb-12">
+            <div className="w-16 h-16 md:w-18 md:h-18 lg:w-20 lg:h-20 bg-blue-600 rounded-[1.5rem] lg:rounded-[2rem] mx-auto mb-6 flex items-center justify-center shadow-xl shadow-blue-600/30 shrink-0">
+              <span className="text-white text-3xl md:text-4xl font-black">N</span>
             </div>
-            <h3 className="text-3xl font-black text-white tracking-tight">{authMode === 'login' ? 'Bem-vindo de volta' : 'Crie sua conta'}</h3>
+            <h3 className="text-2xl md:text-3xl font-black text-white tracking-tight">
+              {authMode === 'login' ? 'Bem-vindo de volta' : 'Crie sua conta'}
+            </h3>
           </div>
-          <form onSubmit={handleAuth} className="space-y-6">
+          
+          <form onSubmit={handleAuth} className="space-y-4 lg:space-y-6">
             {authMode === 'signup' && (
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Nome Completo</label>
-                <input type="text" required value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full px-7 py-5 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all" placeholder="Seu Nome" />
+                <input type="text" required value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all text-sm" placeholder="Seu Nome" />
               </div>
             )}
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">E-mail Corporativo</label>
-              <input type="email" required value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} className="w-full px-7 py-5 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all" placeholder="seu@email.com" />
+              <input type="email" required value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all text-sm" placeholder="seu@email.com" />
             </div>
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Senha de Acesso</label>
-              <input type="password" required value={loginPass} onChange={(e) => setLoginPass(e.target.value)} className="w-full px-7 py-5 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all" placeholder="••••••••••••" />
+              <input type="password" required value={loginPass} onChange={(e) => setLoginPass(e.target.value)} className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white focus:outline-none focus:border-blue-500/50 transition-all text-sm" placeholder="••••••••••••" />
             </div>
-            <button disabled={isLoggingIn} type="submit" className="w-full py-6 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-600/20 active:scale-95">
+            <button disabled={isLoggingIn} type="submit" className="w-full py-5 md:py-6 bg-blue-600 hover:bg-blue-500 text-white font-black rounded-2xl transition-all shadow-xl shadow-blue-600/20 active:scale-95 text-xs md:text-sm uppercase tracking-widest mt-2">
               {isLoggingIn ? 'Processando...' : (authMode === 'login' ? 'Entrar no Sistema' : 'Cadastrar Agora')}
             </button>
           </form>
-          <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="w-full mt-10 text-[10px] text-slate-500 font-black uppercase tracking-widest hover:text-blue-400 transition-colors">
+          
+          <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="w-full mt-6 md:mt-8 text-[9px] md:text-[10px] text-slate-500 font-black uppercase tracking-widest hover:text-blue-400 transition-colors">
             {authMode === 'login' ? 'Não possui conta? Registre-se aqui' : 'Já possui conta? Faça o login'}
           </button>
         </div>
