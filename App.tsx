@@ -182,6 +182,11 @@ const App: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState<'all' | 'service' | 'product'>('all');
   const [filterMonth, setFilterMonth] = useState('');
 
+  // States for Expense Filters
+  const [expFilterSearch, setExpFilterSearch] = useState('');
+  const [expFilterCategory, setExpFilterCategory] = useState('all');
+  const [expFilterMonth, setExpFilterMonth] = useState('');
+
   // States for WhatsApp Hub
   const [whatsOverridePhone, setWhatsOverridePhone] = useState('');
   
@@ -293,6 +298,56 @@ const App: React.FC = () => {
     });
   }, [history, filterSearch, filterCategory, filterMonth]);
 
+  // Logic for filtering expenses without mutation
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter(e => {
+      const matchSearch = e.description.toLowerCase().includes(expFilterSearch.toLowerCase());
+      const matchCategory = expFilterCategory === 'all' || e.category === expFilterCategory;
+      const matchMonth = !expFilterMonth || e.date.startsWith(expFilterMonth);
+      return matchSearch && matchCategory && matchMonth;
+    });
+  }, [expenses, expFilterSearch, expFilterCategory, expFilterMonth]);
+
+  // Metrics optimized for filters in the Financial Hub
+  const dashboardMetrics = useMemo(() => {
+    const now = new Date();
+    const currentYear = now.getFullYear();
+    
+    // Base annual data for progress bar
+    const yearHistory = history.filter(h => new Date(h.timestamp).getFullYear() === currentYear);
+    const totalAnnualRevenue = yearHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
+    const progress = Math.min(100, (totalAnnualRevenue / 81000) * 100);
+
+    // KPI Calculation Logic based on active context
+    let relevantHistory = yearHistory;
+    let relevantExpenses = expenses.filter(e => new Date(e.date).getFullYear() === currentYear);
+
+    // When in expenses tab, KPIs are contextual to the active filter set
+    if (financialTab === 'expenses') {
+        // 1. Faturamento: Sincronizado com o mês do filtro de despesas (se houver)
+        if (expFilterMonth) {
+            relevantHistory = history.filter(h => {
+                const d = new Date(h.timestamp);
+                const itemCompetency = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                return itemCompetency === expFilterMonth;
+            });
+        }
+        // 2. Custos: Reflete EXATAMENTE a lista filtrada no momento
+        relevantExpenses = filteredExpenses;
+    }
+
+    const faturamentoBruto = relevantHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
+    const custoOperacional = relevantExpenses.reduce((acc, curr) => acc + curr.amount, 0);
+    
+    return { 
+      totalAnnual: totalAnnualRevenue, 
+      faturamentoBruto,
+      custoOperacional,
+      lucroReal: faturamentoBruto - custoOperacional, 
+      progress 
+    };
+  }, [history, expenses, financialTab, expFilterMonth, filteredExpenses]);
+
   const handleSaveProfile = async () => {
     if (!session?.user) return;
     setIsSavingProfile(true);
@@ -356,17 +411,6 @@ const App: React.FC = () => {
     const { error } = await supabase.from('expenses').delete().eq('id', id);
     if (!error) { showToast('Despesa removida.', 'info'); loadExpenses(); }
   };
-
-  const dashboardMetrics = useMemo(() => {
-    const now = new Date();
-    const currentYear = now.getFullYear();
-    const yearHistory = history.filter(h => new Date(h.timestamp).getFullYear() === currentYear);
-    const yearExpenses = expenses.filter(e => new Date(e.date).getFullYear() === currentYear);
-    const totalAnnual = yearHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
-    const totalExpenses = yearExpenses.reduce((acc, curr) => acc + curr.amount, 0);
-    const progress = Math.min(100, (totalAnnual / 81000) * 100);
-    return { totalAnnual, totalExpenses, lucroReal: totalAnnual - totalExpenses, progress, remaining: 81000 - totalAnnual };
-  }, [history, expenses]);
 
   const handlePrint = async () => {
     if (!invoiceRef.current) return;
@@ -492,6 +536,30 @@ const App: React.FC = () => {
   const handleLogout = async () => { await supabase.auth.signOut(); setView('landing'); };
   const updateProvider = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, provider: { ...prev.provider, [field]: value } }));
   const updateClient = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, client: { ...prev.client, [field]: value } }));
+
+  // Helper to render active filter info
+  const renderFilterStatus = () => {
+    const activeFilters = [];
+    if (financialTab === 'expenses') {
+        if (expFilterMonth) activeFilters.push(`Competência: ${expFilterMonth}`);
+        if (expFilterCategory !== 'all') activeFilters.push(`Categoria: ${expFilterCategory}`);
+        if (expFilterSearch) activeFilters.push(`Busca: "${expFilterSearch}"`);
+    } else {
+        // Monitor DAS is usually annual view
+        activeFilters.push(`Ano Base: ${new Date().getFullYear()}`);
+    }
+
+    return (
+        <div className="flex items-center gap-2 mb-4 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
+            <div className={`w-1.5 h-1.5 rounded-full ${activeFilters.length > 1 || (financialTab === 'expenses' && activeFilters.length > 0) ? 'bg-blue-500 animate-pulse' : 'bg-slate-800'}`}></div>
+            <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest leading-none">
+                {activeFilters.length > 0 && financialTab === 'expenses'
+                  ? `Exibindo análise para: ${activeFilters.join(' • ')}`
+                  : `Visualização Geral Anual (${new Date().getFullYear()})`}
+            </span>
+        </div>
+    );
+  };
 
   if (!session) return (
     <div className="min-h-screen lg:h-screen bg-[#020617] flex flex-col md:flex-row p-6 md:px-8 lg:p-12 relative overflow-y-auto lg:overflow-hidden items-center justify-center gap-10 md:gap-8 lg:gap-20 animate-in fade-in duration-700">
@@ -699,21 +767,24 @@ const App: React.FC = () => {
             </div>
           </header>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="bg-emerald-600/10 border border-emerald-600/20 p-10 rounded-[3rem] text-center space-y-2 shadow-2xl">
-               <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Lucro Real Estimado</span>
-               <p className="text-4xl font-black text-white tracking-tighter">{formatCurrency(dashboardMetrics.lucroReal)}</p>
-               <p className="text-[9px] text-emerald-800 font-bold uppercase">Base Isenta de IRPF</p>
+          <section>
+            {renderFilterStatus()}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div className="bg-emerald-600/10 border border-emerald-600/20 p-10 rounded-[3rem] text-center space-y-2 shadow-2xl">
+                <span className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Lucro Real Estimado</span>
+                <p className="text-4xl font-black text-white tracking-tighter">{formatCurrency(dashboardMetrics.lucroReal)}</p>
+                <p className="text-[9px] text-emerald-800 font-bold uppercase">Base Isenta de IRPF</p>
+                </div>
+                <div className="bg-white/5 border border-white/10 p-10 rounded-[3rem] text-center space-y-2 shadow-xl">
+                <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Faturamento Bruto</span>
+                <p className="text-3xl font-black text-white">{formatCurrency(dashboardMetrics.faturamentoBruto)}</p>
+                </div>
+                <div className="bg-white/5 border border-white/10 p-10 rounded-[3rem] text-center space-y-2 shadow-xl">
+                <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">Custo Operacional</span>
+                <p className="text-3xl font-black text-rose-500">{formatCurrency(dashboardMetrics.custoOperacional)}</p>
+                </div>
             </div>
-            <div className="bg-white/5 border border-white/10 p-10 rounded-[3rem] text-center space-y-2 shadow-xl">
-               <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Faturamento Bruto</span>
-               <p className="text-3xl font-black text-white">{formatCurrency(dashboardMetrics.totalAnnual)}</p>
-            </div>
-            <div className="bg-white/5 border border-white/10 p-10 rounded-[3rem] text-center space-y-2 shadow-xl">
-               <span className="text-[10px] font-black text-rose-500 uppercase tracking-widest">Custo Operacional</span>
-               <p className="text-3xl font-black text-rose-500">{formatCurrency(dashboardMetrics.totalExpenses)}</p>
-            </div>
-          </div>
+          </section>
 
           {financialTab === 'das' ? (
             <div className="bg-white/5 border border-white/10 p-12 rounded-[4rem] space-y-12 shadow-2xl">
@@ -750,7 +821,7 @@ const App: React.FC = () => {
                     <InputGroup label="Valor Pago R$" type="number" value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} />
                     <div className="space-y-2">
                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">Categoria de Custo</label>
-                       <select value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white outline-none focus:border-emerald-500/50 appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22%23475569%22%20stroke-width%3D%223%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C/polyline%3E%3C/svg%3E')] bg-[length:18px_18px] bg-[right_1rem_center] bg-no-repeat">
+                       <select value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white outline-none focus:border-emerald-500/50 appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%22%20fill%3D%22none%22%20stroke%3D%22%23475569%22%20stroke-width%3D%223%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C/polyline%3E%3C/svg%3E')] bg-[length:18px_18px] bg-[right_1rem_center] bg-no-repeat">
                           {EXPENSE_CATEGORIES.map(c => <option key={c} value={c} className="bg-[#0f172a]">{c}</option>)}
                        </select>
                     </div>
@@ -758,24 +829,81 @@ const App: React.FC = () => {
                     <button type="submit" className="w-full py-5 bg-emerald-600 rounded-2xl text-white font-black uppercase text-[10px] tracking-widest shadow-xl shadow-emerald-600/20 active:scale-95 transition-all">Adicionar Saída</button>
                  </form>
                </div>
-               <div className="lg:col-span-2 space-y-4">
-                  {expenses.length === 0 ? (
-                    <div className="h-64 flex items-center justify-center border border-dashed border-white/5 rounded-[4rem] text-slate-700 font-black uppercase tracking-widest text-xs">Sem lançamentos</div>
-                  ) : expenses.map(e => (
-                    <div key={e.id} className="p-8 bg-white/5 border border-white/10 rounded-[2.5rem] flex items-center justify-between group hover:border-emerald-500/30 transition-all shadow-lg">
-                       <div className="flex items-center gap-8">
-                          <div className="w-14 h-14 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-500 font-black text-[10px]">{e.category.slice(0,3).toUpperCase()}</div>
-                          <div>
-                            <h4 className="font-black text-white text-lg uppercase tracking-tight">{e.description}</h4>
-                            <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1.5">{formatDate(e.date)} • {e.category}</p>
-                          </div>
-                       </div>
-                       <div className="flex items-center gap-8">
-                          <span className="text-2xl font-black text-rose-500 tracking-tighter">{formatCurrency(e.amount)}</span>
-                          <button onClick={() => handleDeleteExpense(e.id)} className="p-3 text-slate-800 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500/10 rounded-xl"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2-2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
-                       </div>
+               
+               <div className="lg:col-span-2 space-y-6">
+                  {/* Expense Filter Toolbelt */}
+                  <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 shadow-lg flex flex-col gap-6">
+                    <div className="flex flex-col md:flex-row gap-4">
+                      <div className="flex-1 relative">
+                        <input 
+                          type="text" 
+                          value={expFilterSearch}
+                          onChange={e => setExpFilterSearch(e.target.value)}
+                          placeholder="Filtrar despesa..." 
+                          className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-xs outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
+                        />
+                        <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                      </div>
+                      <input 
+                        type="month" 
+                        value={expFilterMonth}
+                        onChange={e => setExpFilterMonth(e.target.value)}
+                        className="px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-[10px] font-black uppercase tracking-widest outline-none focus:border-emerald-500/50 transition-all cursor-pointer"
+                      />
                     </div>
-                  ))}
+                    
+                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                       <button 
+                         onClick={() => setExpFilterCategory('all')}
+                         className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${expFilterCategory === 'all' ? 'bg-emerald-600 text-white shadow-lg' : 'bg-white/5 text-slate-500 border border-white/10'}`}
+                       >
+                         Todas
+                       </button>
+                       {EXPENSE_CATEGORIES.map(c => (
+                         <button 
+                           key={c}
+                           onClick={() => setExpFilterCategory(c)}
+                           className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${expFilterCategory === c ? 'bg-emerald-600 text-white shadow-lg' : 'bg-white/5 text-slate-500 border border-white/10'}`}
+                         >
+                           {c}
+                         </button>
+                       ))}
+                    </div>
+
+                    {(expFilterSearch || expFilterCategory !== 'all' || expFilterMonth) && (
+                      <button 
+                        onClick={() => { setExpFilterSearch(''); setExpFilterCategory('all'); setExpFilterMonth(''); }}
+                        className="text-[9px] font-black text-rose-500 uppercase tracking-widest text-left"
+                      >
+                        Remover Filtros
+                      </button>
+                    )}
+                  </section>
+
+                  <div className="space-y-4">
+                    {filteredExpenses.length === 0 ? (
+                      <div className="h-64 flex flex-col items-center justify-center border border-dashed border-white/5 rounded-[4rem] gap-4">
+                        <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center text-slate-800">
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        </div>
+                        <span className="text-slate-800 font-black uppercase tracking-widest text-[10px]">Sem despesas para este filtro</span>
+                      </div>
+                    ) : filteredExpenses.map(e => (
+                      <div key={e.id} className="p-6 md:p-8 bg-white/5 border border-white/10 rounded-[2.5rem] flex items-center justify-between group hover:border-emerald-500/30 transition-all shadow-lg gap-4">
+                        <div className="flex items-center gap-4 md:gap-8 min-w-0">
+                            <div className="w-12 h-12 md:w-14 md:h-14 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-500 font-black text-[9px] md:text-[10px] shrink-0">{e.category.slice(0,3).toUpperCase()}</div>
+                            <div className="min-w-0">
+                              <h4 className="font-black text-white text-base md:text-lg uppercase tracking-tight truncate">{e.description}</h4>
+                              <p className="text-[9px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1 md:mt-1.5">{formatDate(e.date)} • {e.category}</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-4 md:gap-8 shrink-0">
+                            <span className="text-xl md:text-2xl font-black text-rose-500 tracking-tighter">{formatCurrency(e.amount)}</span>
+                            <button onClick={() => handleDeleteExpense(e.id)} className="p-2.5 text-slate-800 hover:text-rose-500 md:opacity-0 group-hover:opacity-100 transition-all hover:bg-rose-500/10 rounded-xl"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2-2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                </div>
             </div>
           )}
