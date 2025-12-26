@@ -1,4 +1,6 @@
 
+export type InvoiceCategory = 'service' | 'product';
+
 export interface Entity {
   name: string;
   tradingName?: string;
@@ -23,8 +25,7 @@ export interface InvoiceItem {
   description: string;
   quantity: number;
   unitValue: number;
-  unit?: string; // Ex: un, kg, cx (Para Produtos)
-  ncm?: string;  // Código NCM (Para Produtos)
+  unit?: string;
 }
 
 export interface Taxes {
@@ -41,7 +42,7 @@ export interface Branding {
   secondaryColor: string;
   logoLetter: string;
   logoImage?: string;
-  template?: 'classic' | 'modern' | 'minimal';
+  template: 'classic' | 'modern' | 'minimal';
 }
 
 export interface InvoiceLabels {
@@ -56,8 +57,6 @@ export interface InvoiceLabels {
   signatureLabel: string;
   totalLabel: string;
 }
-
-export type InvoiceCategory = 'service' | 'product';
 
 export interface InvoiceData {
   category: InvoiceCategory;
@@ -77,6 +76,7 @@ export interface InvoiceData {
   labels: InvoiceLabels;
   branding: Branding;
   pdfUrl?: string;
+  whatsappMessage?: string;
 }
 
 export interface InvoiceHistoryItem {
@@ -87,4 +87,19 @@ export interface InvoiceHistoryItem {
   totalValue: number;
   clientName: string;
   pdfUrl?: string;
+}
+
+export interface Expense {
+  id: string;
+  description: string;
+  amount: number;
+  category: string;
+  date: string;
+}
+
+export interface DasPayment {
+  id?: string;
+  year: number;
+  month: number;
+  isPaid: boolean;
 }
