@@ -177,6 +177,9 @@ const App: React.FC = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [dasPayments, setDasPayments] = useState<DasPayment[]>([]);
   
+  // States for WhatsApp Hub
+  const [whatsOverridePhone, setWhatsOverridePhone] = useState('');
+  
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [userName, setUserName] = useState('');
@@ -220,6 +223,13 @@ const App: React.FC = () => {
       loadDasPayments();
     }
   }, [session]);
+
+  // Sync override phone when client changes
+  useEffect(() => {
+    if (data.client) {
+      setWhatsOverridePhone(data.client.whatsapp || data.client.phone || '');
+    }
+  }, [data.client]);
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     const id = Date.now();
@@ -394,7 +404,7 @@ const App: React.FC = () => {
   };
 
   const handleSendWhatsApp = () => {
-    const phone = data.client.whatsapp?.replace(/\D/g, '') || data.client.phone?.replace(/\D/g, '');
+    const phone = whatsOverridePhone.replace(/\D/g, '') || data.client.whatsapp?.replace(/\D/g, '') || data.client.phone?.replace(/\D/g, '');
     if (!phone) return showToast('Número de WhatsApp não informado.', 'error');
     if (!data.pdfUrl) return showToast('Gere o documento primeiro.', 'error');
     
@@ -402,6 +412,13 @@ const App: React.FC = () => {
     const parsedMessage = parseWhatsAppMessage(rawMessage);
     const message = encodeURIComponent(parsedMessage);
     window.open(`https://api.whatsapp.com/send?phone=55${phone}&text=${message}`, '_blank');
+  };
+
+  const handleCopyLink = () => {
+    if (data.pdfUrl) {
+      navigator.clipboard.writeText(data.pdfUrl);
+      showToast('Link copiado!', 'success');
+    }
   };
 
   const insertTag = (tag: string) => {
@@ -561,12 +578,9 @@ const App: React.FC = () => {
                 <div className="text-center py-20 md:py-40 border border-dashed border-white/10 rounded-[2rem] md:rounded-[3rem] text-slate-700 font-black uppercase tracking-widest text-xs">Nenhum documento encontrado</div>
               ) : history.map(item => (
                 <div key={item.id} className="p-5 md:p-8 bg-white/5 border border-white/10 rounded-[2rem] md:rounded-[3rem] flex flex-col md:flex-row items-center group hover:bg-white/[0.08] transition-all shadow-xl gap-6 md:gap-8">
-                  {/* Icon Section */}
                   <div className="w-12 h-12 md:w-16 md:h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all uppercase text-[10px] shrink-0">
                     {item.category === 'product' ? '📦' : '⚡'}
                   </div>
-                  
-                  {/* Client Info Section - flex-1 pushes everything else to the right */}
                   <div className="flex-1 min-w-0">
                     <h4 className="font-black text-white text-lg md:text-2xl uppercase tracking-tight truncate">
                       {item.clientName || 'Cliente não identificado'}
@@ -575,8 +589,6 @@ const App: React.FC = () => {
                       Doc #{item.data.invoiceNumber} • {new Date(item.timestamp).toLocaleDateString('pt-BR')}
                     </p>
                   </div>
-
-                  {/* Value and Actions Section - shrink-0 ensures it doesn't get squished */}
                   <div className="flex items-center justify-between md:justify-end gap-6 md:gap-10 w-full md:w-auto pt-4 md:pt-0 border-t border-white/5 md:border-0 shrink-0">
                     <div className="md:text-right">
                       <span className="text-xl md:text-2xl font-black text-white block tracking-tighter">
@@ -689,7 +701,6 @@ const App: React.FC = () => {
         </div>
       ) : (
         <div className="min-h-screen flex flex-col animate-in fade-in duration-500">
-          {/* Editor Fixed Header for Mobile/Tablet */}
           <div className="lg:hidden sticky top-0 z-40 bg-[#0f172a]/95 backdrop-blur-xl border-b border-white/10 p-4">
             <div className="flex justify-between items-center mb-4">
                <button onClick={() => setView('landing')} className="text-xl font-black text-blue-500 uppercase tracking-tighter">NovaInvoice</button>
@@ -715,7 +726,6 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex flex-col lg:flex-row flex-1 relative">
-            {/* Editor Sidebar (PC) */}
             <aside className={`w-full lg:w-[500px] bg-[#0f172a]/90 backdrop-blur-3xl border-r border-white/10 p-6 md:p-10 space-y-12 overflow-y-auto lg:h-screen scrollbar-hide no-print ${editorActiveTab === 'preview' ? 'hidden lg:block' : 'block'}`}>
               <header className="hidden lg:flex justify-between items-center mb-6">
                  <button onClick={() => setView('landing')} className="text-3xl font-black text-blue-500 uppercase tracking-tighter">NovaInvoice</button>
@@ -781,7 +791,7 @@ const App: React.FC = () => {
                          <InputGroup label="Série" value={data.serie} onChange={e => setData(prev => ({ ...prev, serie: e.target.value }))} />
                       </div>
                       <div className="grid grid-cols-2 gap-4">
-                         <InputGroup label="Emissão" type="date" value={data.issueDate} onChange={e => setData(prev => ({ ...prev, invoiceDate: e.target.value }))} />
+                         <InputGroup label="Emissão" type="date" value={data.issueDate} onChange={e => setData(prev => ({ ...prev, issueDate: e.target.value }))} />
                          <InputGroup label="Competência" value={data.competency} onChange={e => setData(prev => ({ ...prev, competency: e.target.value }))} placeholder="MM/AAAA" />
                       </div>
                    </div>
@@ -865,42 +875,71 @@ const App: React.FC = () => {
             
             {/* Editor Preview Area */}
             <main className={`flex-1 flex flex-col items-center lg:items-start justify-start lg:justify-start p-4 sm:p-10 lg:p-12 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#020617] transition-all duration-300 ${editorActiveTab === 'form' ? 'hidden lg:flex' : 'flex'}`}>
-              <div className="hidden lg:flex w-full max-w-[850px] justify-between items-center mb-10 mx-auto">
-                 <div className="px-6 py-3 bg-blue-600/10 border border-blue-600/20 text-blue-500 rounded-2xl text-[11px] font-black uppercase tracking-widest shadow-xl">Visualização Real-time Inteligente</div>
+              <div className="hidden lg:flex w-full max-w-[900px] justify-between items-center mb-10 mx-auto gap-8">
+                 <div className="px-6 py-3 bg-blue-600/10 border border-blue-600/20 text-blue-500 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-xl shrink-0">Real-time Preview</div>
                  
                  {data.pdfUrl && (
-                   <div className="flex gap-4 animate-in slide-in-from-top-4 duration-500">
-                     <div className="bg-emerald-600/10 border border-emerald-600/20 p-3 rounded-2xl flex items-center gap-4 shadow-xl">
-                        <span className="text-[9px] font-black text-emerald-500 uppercase tracking-widest pl-2">Link Pronto:</span>
-                        <input readOnly value={data.pdfUrl} className="bg-white/5 border border-white/10 text-[9px] text-white py-1.5 px-3 rounded-lg outline-none w-40 font-mono" />
-                        <button onClick={handleSendWhatsApp} className="px-4 py-1.5 bg-emerald-600 text-white rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-emerald-500 transition-all flex items-center gap-2">
-                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                           Enviar Whats
+                   <div className="flex-1 flex gap-3 animate-in slide-in-from-top-4 duration-500">
+                     <div className="w-full flex bg-emerald-600/10 border border-emerald-600/20 p-2.5 rounded-2xl items-center gap-3 shadow-xl backdrop-blur-md">
+                        <div className="flex flex-col px-3 border-r border-emerald-500/20">
+                          <span className="text-[8px] font-black text-emerald-500 uppercase tracking-widest">Enviar p/ Whatsapp:</span>
+                          <input 
+                            value={whatsOverridePhone} 
+                            onChange={e => setWhatsOverridePhone(e.target.value)}
+                            placeholder="(00) 00000-0000"
+                            className="bg-transparent text-[11px] text-white font-bold outline-none w-32 placeholder:text-emerald-900" 
+                          />
+                        </div>
+                        
+                        <div className="flex-1 flex items-center gap-2 bg-white/5 border border-white/5 px-4 py-2 rounded-xl">
+                          <span className="text-[8px] font-black text-slate-500 uppercase">Link:</span>
+                          <input readOnly value={data.pdfUrl} className="bg-transparent border-none text-[9px] text-white outline-none w-full font-mono" />
+                          <button onClick={handleCopyLink} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-all"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                        </div>
+
+                        <button onClick={handleSendWhatsApp} className="px-5 py-3 bg-emerald-600 text-white rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-emerald-500 transition-all flex items-center gap-2 shrink-0 shadow-lg">
+                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                           Enviar
                         </button>
                      </div>
                    </div>
                  )}
               </div>
 
-              {/* Mobile Share Actions */}
+              {/* Mobile Hub de Compartilhamento */}
               {data.pdfUrl && (
-                <div className="lg:hidden w-full max-w-[800px] bg-[#0f172a] p-6 rounded-[2rem] border border-emerald-500/30 mb-8 flex flex-col gap-4 shadow-2xl animate-in fade-in slide-in-from-bottom-4">
-                  <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Documento Disponível para Compartilhamento</p>
-                  <div className="flex gap-2">
-                    <input readOnly value={data.pdfUrl} className="flex-1 bg-white/5 border border-white/10 text-[10px] text-slate-300 py-4 px-4 rounded-2xl outline-none" />
-                    <button onClick={handleSendWhatsApp} className="p-4 bg-emerald-600 text-white rounded-2xl flex items-center justify-center shadow-lg"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg></button>
+                <div className="lg:hidden w-full max-w-[800px] bg-[#0f172a] p-8 rounded-[2.5rem] border border-emerald-500/30 mb-8 flex flex-col gap-6 shadow-2xl animate-in fade-in slide-in-from-bottom-4">
+                  <header className="flex justify-between items-center">
+                    <p className="text-[10px] font-black text-emerald-500 uppercase tracking-widest">Documento Disponível</p>
+                    <button onClick={handleCopyLink} className="flex items-center gap-2 text-[10px] font-black uppercase text-blue-400"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copiar Link</button>
+                  </header>
+                  
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                       <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">WhatsApp de Envio</label>
+                       <input 
+                        type="text" 
+                        value={whatsOverridePhone} 
+                        onChange={e => setWhatsOverridePhone(e.target.value)}
+                        placeholder="(00) 00000-0000"
+                        className="w-full px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white font-bold"
+                       />
+                    </div>
+                    
+                    <button onClick={handleSendWhatsApp} className="w-full py-5 bg-emerald-600 text-white rounded-2xl flex items-center justify-center gap-3 font-black text-[10px] uppercase tracking-[0.2em] shadow-xl shadow-emerald-600/20 active:scale-95 transition-all">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                      Enviar pelo WhatsApp
+                    </button>
                   </div>
                 </div>
               )}
 
-              {/* Document Container with Centering Logic */}
               <div className="w-full flex justify-center items-start lg:pt-10 py-10 min-h-full lg:min-h-0">
                 <div className="relative w-[800px] origin-top scale-[0.35] sm:scale-[0.55] md:scale-[0.75] lg:scale-[0.65] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700 mx-auto">
                    <div ref={invoiceRef} className="shadow-[0_80px_160px_-40px_rgba(0,0,0,1)] bg-white"><InvoicePreview data={data} /></div>
                 </div>
               </div>
 
-              {/* Mobile Generate Button (Fixed Bottom) */}
               <div className="lg:hidden fixed bottom-6 left-6 right-6 z-50">
                  <button disabled={isEmitting} onClick={handlePrint} className={`w-full py-6 rounded-[2.5rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 shadow-blue-600/40'}`}>
                    {isEmitting ? 'Processando...' : 'Gerar Documento Agora'}
