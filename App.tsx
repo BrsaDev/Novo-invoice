@@ -91,15 +91,16 @@ const INITIAL_DATA: InvoiceData = {
 };
 
 const EXPENSE_CATEGORIES = [
-  "Software / Assinaturas",
-  "Marketing / Tráfego Pago",
-  "Internet / Telefone",
-  "Equipamentos",
-  "Transporte / Viagens",
-  "Educação / Cursos",
-  "Aluguel / Coworking",
-  "Impostos / Taxas",
-  "Outros"
+  { name: "Insumos e Mercadorias", icon: "📦" },
+  { name: "Aluguel e Utilidades", icon: "🏠" },
+  { name: "Tecnologia e Softwares", icon: "💻" },
+  { name: "Marketing e Vendas", icon: "📣" },
+  { name: "Equipamentos e Ferramentas", icon: "🛠️" },
+  { name: "Logística e Transportes", icon: "🚚" },
+  { name: "Serviços de Terceiros", icon: "🤝" },
+  { name: "Impostos e Tributos", icon: "🏛️" },
+  { name: "Educação e Desenvolvimento", icon: "📚" },
+  { name: "Outras Despesas", icon: "📎" }
 ];
 
 const shortenUrl = async (longUrl: string): Promise<string> => {
@@ -196,7 +197,7 @@ const App: React.FC = () => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   
-  const [expenseForm, setExpenseForm] = useState({ description: '', amount: '', category: 'Software / Assinaturas', date: new Date().toISOString().split('T')[0] });
+  const [expenseForm, setExpenseForm] = useState({ description: '', amount: '', category: 'Insumos e Mercadorias', date: new Date().toISOString().split('T')[0] });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEmitting, setIsEmitting] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
@@ -313,28 +314,39 @@ const App: React.FC = () => {
     const now = new Date();
     const currentYear = now.getFullYear();
     
-    // Base annual data for progress bar
+    // Base annual data for progress bar (fixed to year)
     const yearHistory = history.filter(h => new Date(h.timestamp).getFullYear() === currentYear);
     const totalAnnualRevenue = yearHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
     const progress = Math.min(100, (totalAnnualRevenue / 81000) * 100);
 
-    // KPI Calculation Logic based on active context
+    // Contextual Data based on GLOBAL FILTERS (Shared across tabs)
     let relevantHistory = yearHistory;
     let relevantExpenses = expenses.filter(e => new Date(e.date).getFullYear() === currentYear);
 
-    // When in expenses tab, KPIs are contextual to the active filter set
-    if (financialTab === 'expenses') {
-        // 1. Faturamento: Sincronizado com o mês do filtro de despesas (se houver)
-        if (expFilterMonth) {
-            relevantHistory = history.filter(h => {
-                const d = new Date(h.timestamp);
-                const itemCompetency = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-                return itemCompetency === expFilterMonth;
-            });
-        }
-        // 2. Custos: Reflete EXATAMENTE a lista filtrada no momento
-        relevantExpenses = filteredExpenses;
+    // Apply shared filters to Metrics
+    if (expFilterMonth) {
+        relevantHistory = history.filter(h => {
+            const d = new Date(h.timestamp);
+            const itemCompetency = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            return itemCompetency === expFilterMonth;
+        });
+        relevantExpenses = expenses.filter(e => e.date.startsWith(expFilterMonth));
     }
+    
+    if (expFilterCategory !== 'all') {
+        relevantExpenses = relevantExpenses.filter(e => e.category === expFilterCategory);
+    }
+
+    if (expFilterSearch) {
+        relevantExpenses = relevantExpenses.filter(e => e.description.toLowerCase().includes(expFilterSearch.toLowerCase()));
+    }
+
+    // Category-specific totals for the bento grid filters (always based on current year or month if filtered)
+    const categoryTotals: Record<string, number> = {};
+    const baseExpensesForIcons = expFilterMonth ? expenses.filter(e => e.date.startsWith(expFilterMonth)) : expenses.filter(e => new Date(e.date).getFullYear() === currentYear);
+    baseExpensesForIcons.forEach(e => {
+        categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount;
+    });
 
     const faturamentoBruto = relevantHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
     const custoOperacional = relevantExpenses.reduce((acc, curr) => acc + curr.amount, 0);
@@ -344,9 +356,10 @@ const App: React.FC = () => {
       faturamentoBruto,
       custoOperacional,
       lucroReal: faturamentoBruto - custoOperacional, 
-      progress 
+      progress,
+      categoryTotals
     };
-  }, [history, expenses, financialTab, expFilterMonth, filteredExpenses]);
+  }, [history, expenses, expFilterMonth, expFilterCategory, expFilterSearch]);
 
   const handleSaveProfile = async () => {
     if (!session?.user) return;
@@ -355,8 +368,7 @@ const App: React.FC = () => {
       user_id: session.user.id,
       name: data.provider.name,
       tax_id: data.provider.taxId,
-      street: data.provider.street,
-      number: data.provider.number,
+      street: data.provider.number,
       city: data.provider.city,
       uf: data.provider.uf,
       email: data.provider.email,
@@ -537,26 +549,33 @@ const App: React.FC = () => {
   const updateProvider = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, provider: { ...prev.provider, [field]: value } }));
   const updateClient = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, client: { ...prev.client, [field]: value } }));
 
-  // Helper to render active filter info
+  // Helper to render active filter info - Now SHARED across all tabs
   const renderFilterStatus = () => {
     const activeFilters = [];
-    if (financialTab === 'expenses') {
-        if (expFilterMonth) activeFilters.push(`Competência: ${expFilterMonth}`);
-        if (expFilterCategory !== 'all') activeFilters.push(`Categoria: ${expFilterCategory}`);
-        if (expFilterSearch) activeFilters.push(`Busca: "${expFilterSearch}"`);
-    } else {
-        // Monitor DAS is usually annual view
-        activeFilters.push(`Ano Base: ${new Date().getFullYear()}`);
-    }
+    if (expFilterMonth) activeFilters.push(`Competência: ${expFilterMonth}`);
+    if (expFilterCategory !== 'all') activeFilters.push(`Categoria: ${expFilterCategory}`);
+    if (expFilterSearch) activeFilters.push(`Busca: "${expFilterSearch}"`);
+
+    const hasFilters = activeFilters.length > 0;
 
     return (
-        <div className="flex items-center gap-2 mb-4 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
-            <div className={`w-1.5 h-1.5 rounded-full ${activeFilters.length > 1 || (financialTab === 'expenses' && activeFilters.length > 0) ? 'bg-blue-500 animate-pulse' : 'bg-slate-800'}`}></div>
-            <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest leading-none">
-                {activeFilters.length > 0 && financialTab === 'expenses'
-                  ? `Exibindo análise para: ${activeFilters.join(' • ')}`
-                  : `Visualização Geral Anual (${new Date().getFullYear()})`}
-            </span>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 px-2 animate-in fade-in slide-in-from-left-2 duration-500">
+            <div className="flex items-center gap-2">
+                <div className={`w-1.5 h-1.5 rounded-full ${hasFilters ? 'bg-blue-500 animate-pulse' : 'bg-slate-800'}`}></div>
+                <span className="text-[9px] font-black text-slate-600 uppercase tracking-widest leading-none">
+                    {hasFilters
+                      ? `Exibindo análise para: ${activeFilters.join(' • ')}`
+                      : `Visualização Geral Anual (${new Date().getFullYear()})`}
+                </span>
+            </div>
+            {hasFilters && (
+                <button 
+                  onClick={() => { setExpFilterSearch(''); setExpFilterCategory('all'); setExpFilterMonth(''); }}
+                  className="text-[9px] font-black text-rose-500 uppercase tracking-widest hover:bg-rose-500/10 px-3 py-1.5 rounded-lg transition-all self-start md:self-auto border border-rose-500/20"
+                >
+                  Limpar Filtros Analíticos
+                </button>
+            )}
         </div>
     );
   };
@@ -822,7 +841,7 @@ const App: React.FC = () => {
                     <div className="space-y-2">
                        <label className="text-[9px] font-black text-slate-500 uppercase tracking-widest ml-1">Categoria de Custo</label>
                        <select value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm font-medium text-white outline-none focus:border-emerald-500/50 appearance-none bg-[url('data:image/svg+xml;charset=US-ASCII,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%2224%22%20height%3D%2224%22%20viewBox%3D%220%200%2024%22%20fill%3D%22none%22%20stroke%3D%22%23475569%22%20stroke-width%3D%223%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpolyline%20points%3D%226%209%2012%2015%2018%209%22%3E%3C/polyline%3E%3C/svg%3E')] bg-[length:18px_18px] bg-[right_1rem_center] bg-no-repeat">
-                          {EXPENSE_CATEGORIES.map(c => <option key={c} value={c} className="bg-[#0f172a]">{c}</option>)}
+                          {EXPENSE_CATEGORIES.map(c => <option key={c.name} value={c.name} className="bg-[#0f172a]">{c.name}</option>)}
                        </select>
                     </div>
                     <InputGroup label="Data do Gasto" type="date" value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} />
@@ -831,16 +850,16 @@ const App: React.FC = () => {
                </div>
                
                <div className="lg:col-span-2 space-y-6">
-                  {/* Expense Filter Toolbelt */}
-                  <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 shadow-lg flex flex-col gap-6">
-                    <div className="flex flex-col md:flex-row gap-4">
+                  {/* Expense Filter Toolbelt - BENTO GRID DESIGN */}
+                  <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 shadow-lg space-y-8">
+                    <header className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                       <div className="flex-1 relative">
                         <input 
                           type="text" 
                           value={expFilterSearch}
                           onChange={e => setExpFilterSearch(e.target.value)}
-                          placeholder="Filtrar despesa..." 
-                          className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-xs outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
+                          placeholder="Buscar na listagem..." 
+                          className="w-full pl-12 pr-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-white text-xs outline-none focus:border-emerald-500/50 transition-all placeholder:text-slate-600"
                         />
                         <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                       </div>
@@ -848,35 +867,54 @@ const App: React.FC = () => {
                         type="month" 
                         value={expFilterMonth}
                         onChange={e => setExpFilterMonth(e.target.value)}
-                        className="px-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-[10px] font-black uppercase tracking-widest outline-none focus:border-emerald-500/50 transition-all cursor-pointer"
+                        className="px-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase tracking-widest outline-none focus:border-emerald-500/50 transition-all cursor-pointer"
                       />
-                    </div>
+                    </header>
                     
-                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
                        <button 
                          onClick={() => setExpFilterCategory('all')}
-                         className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${expFilterCategory === 'all' ? 'bg-emerald-600 text-white shadow-lg' : 'bg-white/5 text-slate-500 border border-white/10'}`}
+                         className={`p-4 rounded-2xl border transition-all text-left flex flex-col justify-between gap-4 group ${expFilterCategory === 'all' ? 'bg-emerald-600 border-emerald-400 text-white shadow-xl shadow-emerald-600/20' : 'bg-white/5 text-slate-500 border-white/5 hover:border-white/10 hover:bg-white/[0.07]'}`}
                        >
-                         Todas
+                         <div className="flex justify-between items-start">
+                           <span className="text-xl">🌟</span>
+                           {expFilterCategory === 'all' && <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse"></div>}
+                         </div>
+                         <div>
+                           <span className={`text-[9px] font-black uppercase tracking-widest block ${expFilterCategory === 'all' ? 'text-white/80' : 'text-slate-600'}`}>Todos</span>
+                           <span className="text-[11px] font-black truncate">Geral Anual</span>
+                         </div>
                        </button>
-                       {EXPENSE_CATEGORIES.map(c => (
+
+                       {EXPENSE_CATEGORIES.map(cat => (
                          <button 
-                           key={c}
-                           onClick={() => setExpFilterCategory(c)}
-                           className={`px-4 py-2 rounded-lg text-[9px] font-black uppercase tracking-widest whitespace-nowrap transition-all ${expFilterCategory === c ? 'bg-emerald-600 text-white shadow-lg' : 'bg-white/5 text-slate-500 border border-white/10'}`}
+                           key={cat.name}
+                           onClick={() => setExpFilterCategory(cat.name)}
+                           className={`p-4 rounded-2xl border transition-all text-left flex flex-col justify-between gap-4 group ${expFilterCategory === cat.name ? 'bg-emerald-600 border-emerald-400 text-white shadow-xl shadow-emerald-600/20' : 'bg-white/5 text-slate-500 border-white/5 hover:border-white/10 hover:bg-white/[0.07]'}`}
                          >
-                           {c}
+                           <div className="flex justify-between items-start">
+                             <span className="text-xl">{cat.icon}</span>
+                             <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md border ${expFilterCategory === cat.name ? 'bg-white/10 border-white/20 text-white' : 'bg-black/20 border-white/5 text-slate-600'}`}>
+                               R$ {Math.round(dashboardMetrics.categoryTotals[cat.name] || 0)}
+                             </span>
+                           </div>
+                           <div>
+                             <span className={`text-[8px] font-black uppercase tracking-widest block mb-0.5 ${expFilterCategory === cat.name ? 'text-white/80' : 'text-slate-600'}`}>Categoria</span>
+                             <span className="text-[10px] font-black truncate leading-tight block">{cat.name}</span>
+                           </div>
                          </button>
                        ))}
                     </div>
 
                     {(expFilterSearch || expFilterCategory !== 'all' || expFilterMonth) && (
-                      <button 
-                        onClick={() => { setExpFilterSearch(''); setExpFilterCategory('all'); setExpFilterMonth(''); }}
-                        className="text-[9px] font-black text-rose-500 uppercase tracking-widest text-left"
-                      >
-                        Remover Filtros
-                      </button>
+                      <div className="pt-4 border-t border-white/5 flex justify-end">
+                        <button 
+                          onClick={() => { setExpFilterSearch(''); setExpFilterCategory('all'); setExpFilterMonth(''); }}
+                          className="text-[9px] font-black text-rose-500 uppercase tracking-widest hover:bg-rose-500/10 px-4 py-2 rounded-xl transition-all"
+                        >
+                          Resetar Todos os Filtros
+                        </button>
+                      </div>
                     )}
                   </section>
 
@@ -891,7 +929,9 @@ const App: React.FC = () => {
                     ) : filteredExpenses.map(e => (
                       <div key={e.id} className="p-6 md:p-8 bg-white/5 border border-white/10 rounded-[2.5rem] flex items-center justify-between group hover:border-emerald-500/30 transition-all shadow-lg gap-4">
                         <div className="flex items-center gap-4 md:gap-8 min-w-0">
-                            <div className="w-12 h-12 md:w-14 md:h-14 bg-rose-500/10 rounded-2xl flex items-center justify-center text-rose-500 font-black text-[9px] md:text-[10px] shrink-0">{e.category.slice(0,3).toUpperCase()}</div>
+                            <div className="w-12 h-12 md:w-14 md:h-14 bg-emerald-500/10 rounded-2xl flex items-center justify-center text-emerald-500 font-black text-[12px] md:text-[14px] shrink-0 text-center leading-tight">
+                                {EXPENSE_CATEGORIES.find(cat => cat.name === e.category)?.icon || "📎"}
+                            </div>
                             <div className="min-w-0">
                               <h4 className="font-black text-white text-base md:text-lg uppercase tracking-tight truncate">{e.description}</h4>
                               <p className="text-[9px] md:text-[10px] font-bold text-slate-500 uppercase tracking-widest mt-1 md:mt-1.5">{formatDate(e.date)} • {e.category}</p>
