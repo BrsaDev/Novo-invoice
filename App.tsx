@@ -188,6 +188,10 @@ const App: React.FC = () => {
   const [expFilterCategory, setExpFilterCategory] = useState('all');
   const [expFilterMonth, setExpFilterMonth] = useState('');
 
+  // States for Analytics/DASN Filters
+  const [analyticsYear, setAnalyticsYear] = useState(new Date().getFullYear());
+  const [exportMonth, setExportMonth] = useState(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`);
+
   // States for WhatsApp Hub
   const [whatsOverridePhone, setWhatsOverridePhone] = useState('');
   
@@ -202,7 +206,7 @@ const App: React.FC = () => {
   const [isEmitting, setIsEmitting] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [isSavingClient, setIsSavingClient] = useState(false);
-  const [financialTab, setFinancialTab] = useState<'das' | 'expenses'>('das');
+  const [financialTab, setFinancialTab] = useState<'das' | 'expenses' | 'analytics'>('das');
   const [editorActiveTab, setEditorActiveTab] = useState<'form' | 'preview'>('form');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<any>({ isOpen: false, title: '', message: '', onConfirm: () => {} });
@@ -351,15 +355,27 @@ const App: React.FC = () => {
     const faturamentoBruto = relevantHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
     const custoOperacional = relevantExpenses.reduce((acc, curr) => acc + curr.amount, 0);
     
+    // Analytics calculations (DASN Assistant & Forecasting)
+    const histSelectedYear = history.filter(h => new Date(h.timestamp).getFullYear() === analyticsYear);
+    const totalServicos = histSelectedYear.filter(h => h.category === 'service').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const totalProdutos = histSelectedYear.filter(h => h.category === 'product').reduce((acc, curr) => acc + curr.totalValue, 0);
+    
+    // Monthly trend for forecasting
+    const currentMonthNum = now.getMonth() + 1;
+    const avgMonthly = totalAnnualRevenue / currentMonthNum;
+    const projectedYearEnd = avgMonthly * 12;
+
     return { 
       totalAnnual: totalAnnualRevenue, 
       faturamentoBruto,
       custoOperacional,
       lucroReal: faturamentoBruto - custoOperacional, 
       progress,
-      categoryTotals
+      categoryTotals,
+      dasn: { totalServicos, totalProdutos },
+      forecasting: { avgMonthly, projectedYearEnd }
     };
-  }, [history, expenses, expFilterMonth, expFilterCategory, expFilterSearch]);
+  }, [history, expenses, expFilterMonth, expFilterCategory, expFilterSearch, analyticsYear]);
 
   const handleSaveProfile = async () => {
     if (!session?.user) return;
@@ -422,6 +438,41 @@ const App: React.FC = () => {
   const handleDeleteExpense = async (id: string) => {
     const { error } = await supabase.from('expenses').delete().eq('id', id);
     if (!error) { showToast('Despesa removida.', 'info'); loadExpenses(); }
+  };
+
+  const handleExportPack = () => {
+    const [year, month] = exportMonth.split('-');
+    const filteredHist = history.filter(h => {
+        const d = new Date(h.timestamp);
+        return d.getFullYear() === parseInt(year) && (d.getMonth() + 1) === parseInt(month);
+    });
+    const filteredExp = expenses.filter(e => e.date.startsWith(exportMonth));
+
+    if (filteredHist.length === 0 && filteredExp.length === 0) return showToast('Sem dados para exportar neste mês.', 'error');
+
+    let content = `RELATÓRIO MENSAL - ${month}/${year}\n`;
+    content += `GERADO POR: ${data.provider.name}\n`;
+    content += `--------------------------------------------------\n\n`;
+    
+    content += `DOCS EMITIDOS:\n`;
+    filteredHist.forEach(h => {
+        content += `${new Date(h.timestamp).toLocaleDateString('pt-BR')} | ${h.data.invoiceNumber} | ${h.clientName} | ${formatCurrency(h.totalValue)}\n`;
+    });
+    content += `TOTAL EMISSÕES: ${formatCurrency(filteredHist.reduce((a,b) => a+b.totalValue, 0))}\n\n`;
+
+    content += `DESPESAS REGISTRADAS:\n`;
+    filteredExp.forEach(e => {
+        content += `${formatDate(e.date)} | ${e.description} | ${e.category} | ${formatCurrency(e.amount)}\n`;
+    });
+    content += `TOTAL DESPESAS: ${formatCurrency(filteredExp.reduce((a,b) => a+b.amount, 0))}\n`;
+
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Pack_Contador_${month}_${year}.txt`;
+    link.click();
+    showToast('Pack do Contador exportado!', 'success');
   };
 
   const handlePrint = async () => {
@@ -780,9 +831,10 @@ const App: React.FC = () => {
               <h1 className="text-6xl font-black tracking-tighter text-white">Hub Financeiro</h1>
               <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-2">Gestão de DAS e Despesas Isentas</p>
             </div>
-            <div className="flex bg-white/5 p-2 rounded-3xl border border-white/10 shadow-lg">
-               <button onClick={() => setFinancialTab('das')} className={`px-8 py-4 text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all ${financialTab === 'das' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Monitor DAS</button>
-               <button onClick={() => setFinancialTab('expenses')} className={`px-8 py-4 text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all ${financialTab === 'expenses' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Despesas</button>
+            <div className="flex bg-white/5 p-2 rounded-3xl border border-white/10 shadow-lg overflow-x-auto">
+               <button onClick={() => setFinancialTab('das')} className={`px-6 md:px-8 py-3 md:py-4 text-[9px] md:text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all whitespace-nowrap ${financialTab === 'das' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Monitor DAS</button>
+               <button onClick={() => setFinancialTab('expenses')} className={`px-6 md:px-8 py-3 md:py-4 text-[9px] md:text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all whitespace-nowrap ${financialTab === 'expenses' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Despesas</button>
+               <button onClick={() => setFinancialTab('analytics')} className={`px-6 md:px-8 py-3 md:py-4 text-[9px] md:text-[10px] font-black uppercase tracking-widest rounded-2xl transition-all whitespace-nowrap ${financialTab === 'analytics' ? 'bg-emerald-600 text-white shadow-xl' : 'text-slate-500 hover:text-white'}`}>Análise & Exportação</button>
             </div>
           </header>
 
@@ -831,7 +883,7 @@ const App: React.FC = () => {
                 })}
               </div>
             </div>
-          ) : (
+          ) : financialTab === 'expenses' ? (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
                <div className="lg:col-span-1">
                  <form onSubmit={handleAddExpense} className="bg-white/5 border border-white/10 p-10 rounded-[3rem] space-y-8 shadow-2xl sticky top-8">
@@ -945,6 +997,111 @@ const App: React.FC = () => {
                     ))}
                   </div>
                </div>
+            </div>
+          ) : (
+            <div className="space-y-12 animate-in slide-in-from-bottom-4 duration-500">
+                {/* 1. Previsão de Faturamento (Forecasting) */}
+                <section className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="lg:col-span-2 bg-blue-600/10 border border-blue-500/20 p-10 md:p-12 rounded-[3.5rem] relative overflow-hidden flex flex-col md:flex-row items-center gap-10 shadow-2xl">
+                        <div className="absolute top-[-20%] right-[-10%] w-64 h-64 bg-blue-500/20 blur-[100px] rounded-full"></div>
+                        <div className="space-y-6 flex-1 text-center md:text-left relative z-10">
+                            <div>
+                                <h3 className="text-2xl font-black text-white tracking-tight uppercase">Previsão Anual de Faturamento</h3>
+                                <p className="text-[10px] text-blue-400 font-bold uppercase tracking-[0.2em] mt-1">Algoritmo de Velocidade de Caixa</p>
+                            </div>
+                            <div className="flex items-end justify-center md:justify-start gap-3">
+                                <span className="text-5xl font-black text-white tracking-tighter">{formatCurrency(dashboardMetrics.forecasting.projectedYearEnd)}</span>
+                                <span className="text-xs font-black text-blue-500 uppercase pb-2">Estimado para Dez/31</span>
+                            </div>
+                            <p className="text-slate-400 text-xs font-medium leading-relaxed max-w-sm">
+                                Com base na sua média mensal de <strong className="text-white">{formatCurrency(dashboardMetrics.forecasting.avgMonthly)}</strong>, este é o valor projetado. 
+                                {dashboardMetrics.forecasting.projectedYearEnd > 81000 ? 
+                                    " ⚠️ Atenção: Risco crítico de ultrapassar o limite MEI." : 
+                                    " ✅ Você está dentro da zona de segurança do MEI."
+                                }
+                            </p>
+                        </div>
+                        <div className="shrink-0 text-center space-y-4">
+                            <div className={`w-32 h-32 rounded-full border-8 flex items-center justify-center relative ${dashboardMetrics.forecasting.projectedYearEnd > 81000 ? 'border-rose-500 shadow-rose-500/20' : 'border-blue-500 shadow-blue-500/20'} shadow-2xl transition-all duration-1000`}>
+                                <span className="text-xl font-black text-white">
+                                    {Math.round((dashboardMetrics.forecasting.projectedYearEnd / 81000) * 100)}%
+                                </span>
+                            </div>
+                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest block">Capacidade do Teto</span>
+                        </div>
+                    </div>
+
+                    <div className="bg-white/5 border border-white/10 p-10 rounded-[3.5rem] flex flex-col justify-center items-center text-center space-y-6 shadow-xl">
+                        <div className="w-16 h-16 bg-white/5 rounded-[1.5rem] flex items-center justify-center text-3xl">📦</div>
+                        <div>
+                            <h3 className="text-xl font-black text-white uppercase tracking-tight">Pack do Contador</h3>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Exportação em Um Clique</p>
+                        </div>
+                        <div className="w-full space-y-4">
+                            <input 
+                                type="month" 
+                                value={exportMonth}
+                                onChange={e => setExportMonth(e.target.value)}
+                                className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-[11px] font-black uppercase text-center outline-none focus:border-blue-500/50"
+                            />
+                            <button onClick={handleExportPack} className="w-full py-4 bg-white/10 hover:bg-white/20 border border-white/10 text-white font-black text-[10px] uppercase tracking-[0.2em] rounded-2xl transition-all active:scale-95 shadow-lg">
+                                Baixar Arquivo .TXT
+                            </button>
+                        </div>
+                    </div>
+                </section>
+
+                {/* 2. Assistente DASN-SIMEI */}
+                <section className="bg-white/5 border border-white/10 p-12 md:p-16 rounded-[4rem] space-y-12 shadow-2xl">
+                    <header className="flex flex-col md:flex-row justify-between items-start gap-6">
+                        <div className="space-y-2">
+                            <h3 className="text-3xl font-black uppercase tracking-tighter text-white">Assistente DASN-SIMEI</h3>
+                            <p className="text-[11px] text-slate-500 font-bold uppercase tracking-[0.3em]">Fechamento Fiscal Anual</p>
+                        </div>
+                        <div className="flex bg-white/5 p-2 rounded-2xl border border-white/10">
+                            {[new Date().getFullYear() - 1, new Date().getFullYear()].map(y => (
+                                <button key={y} onClick={() => setAnalyticsYear(y)} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${analyticsYear === y ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-600 hover:text-white'}`}>
+                                    Ano {y}
+                                </button>
+                            ))}
+                        </div>
+                    </header>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                        <div className="p-10 bg-white/[0.03] border border-white/5 rounded-[3rem] space-y-6 group hover:bg-white/[0.05] transition-all">
+                            <div className="flex justify-between items-start">
+                                <span className="text-4xl">⚡</span>
+                                <button onClick={() => { navigator.clipboard.writeText(dashboardMetrics.dasn.totalServicos.toString()); showToast('Copiado para o clipboard!'); }} className="p-3 bg-white/5 rounded-xl text-slate-500 hover:text-blue-400 hover:bg-blue-400/10 transition-all opacity-0 group-hover:opacity-100"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                            </div>
+                            <div>
+                                <h4 className="text-2xl font-black text-white tracking-tight uppercase">Prestação de Serviços</h4>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Valor para declarar no campo específico</p>
+                            </div>
+                            <p className="text-4xl font-black text-blue-500 tracking-tighter">{formatCurrency(dashboardMetrics.dasn.totalServicos)}</p>
+                        </div>
+
+                        <div className="p-10 bg-white/[0.03] border border-white/5 rounded-[3rem] space-y-6 group hover:bg-white/[0.05] transition-all">
+                            <div className="flex justify-between items-start">
+                                <span className="text-4xl">📦</span>
+                                <button onClick={() => { navigator.clipboard.writeText(dashboardMetrics.dasn.totalProdutos.toString()); showToast('Copiado para o clipboard!'); }} className="p-3 bg-white/5 rounded-xl text-slate-500 hover:text-emerald-400 hover:bg-emerald-400/10 transition-all opacity-0 group-hover:opacity-100"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+                            </div>
+                            <div>
+                                <h4 className="text-2xl font-black text-white tracking-tight uppercase">Vendas de Mercadorias</h4>
+                                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">Valor para o campo de Comércio/Indústria</p>
+                            </div>
+                            <p className="text-4xl font-black text-emerald-500 tracking-tighter">{formatCurrency(dashboardMetrics.dasn.totalProdutos)}</p>
+                        </div>
+                    </div>
+
+                    <div className="p-8 bg-blue-600/5 border border-blue-500/10 rounded-[2.5rem] flex items-center gap-6">
+                        <div className="w-12 h-12 bg-blue-600/20 rounded-full flex items-center justify-center text-blue-400 shrink-0">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                        </div>
+                        <p className="text-[11px] font-medium text-slate-400 leading-relaxed uppercase">
+                            <strong>Dica NovaInvoice:</strong> O governo exige que você separe o que foi serviço do que foi venda. Use os valores acima diretamente no portal do Simples Nacional em Maio de cada ano.
+                        </p>
+                    </div>
+                </section>
             </div>
           )}
         </div>
