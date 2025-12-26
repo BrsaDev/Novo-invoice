@@ -57,6 +57,17 @@
             background: rgba(255, 255, 255, 0.1);
             border-radius: 10px;
         }
+        /* Ajuste do ícone do calendário para ser visível no tema escuro */
+        input::-webkit-calendar-picker-indicator {
+            filter: invert(1) brightness(100%);
+            cursor: pointer;
+            padding: 5px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }
+        input::-webkit-calendar-picker-indicator:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
         /* Animação suave para as luzes de fundo */
         @keyframes pulse-orb {
             0%, 100% { transform: scale(1); opacity: 0.1; }

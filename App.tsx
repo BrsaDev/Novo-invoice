@@ -177,6 +177,11 @@ const App: React.FC = () => {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [dasPayments, setDasPayments] = useState<DasPayment[]>([]);
   
+  // States for History Filters
+  const [filterSearch, setFilterSearch] = useState('');
+  const [filterCategory, setFilterCategory] = useState<'all' | 'service' | 'product'>('all');
+  const [filterMonth, setFilterMonth] = useState('');
+
   // States for WhatsApp Hub
   const [whatsOverridePhone, setWhatsOverridePhone] = useState('');
   
@@ -273,6 +278,20 @@ const App: React.FC = () => {
     const { data: list } = await supabase.from('das_payments').select('*');
     if (list) setDasPayments(list.map(d => ({ id: d.id, year: d.year, month: d.month, isPaid: d.is_paid })));
   };
+
+  // Logic for filtering history without mutation
+  const filteredHistory = useMemo(() => {
+    return history.filter(item => {
+      const matchSearch = item.clientName.toLowerCase().includes(filterSearch.toLowerCase()) || 
+                          item.data.invoiceNumber.includes(filterSearch);
+      const matchCategory = filterCategory === 'all' || item.category === filterCategory;
+      const itemDate = new Date(item.timestamp);
+      const matchMonth = !filterMonth || (
+        `${itemDate.getFullYear()}-${String(itemDate.getMonth() + 1).padStart(2, '0')}` === filterMonth
+      );
+      return matchSearch && matchCategory && matchMonth;
+    });
+  }, [history, filterSearch, filterCategory, filterMonth]);
 
   const handleSaveProfile = async () => {
     if (!session?.user) return;
@@ -570,10 +589,10 @@ const App: React.FC = () => {
           </div>
         </div>
       ) : view === 'history' ? (
-        <div className="p-4 md:p-16 max-w-6xl mx-auto space-y-8 md:space-y-12 animate-in fade-in duration-500">
+        <div className="p-4 md:p-16 max-w-6xl mx-auto space-y-8 md:space-y-12 animate-in fade-in duration-500 pb-32">
            <header className="flex flex-col md:flex-row justify-between md:items-end gap-6">
              <div>
-               <button onClick={() => setView('landing')} className="text-blue-500 text-[10px] font-black uppercase tracking-widest mb-4 hover:translate-x-[-4px] transition-transform">← Voltar</button>
+               <button onClick={() => setView('landing')} className="text-blue-500 text-[10px] font-black uppercase tracking-widest mb-4 hover:translate-x-[-4px] transition-transform flex items-center gap-1">← Voltar</button>
                <h1 className="text-4xl md:text-6xl font-black tracking-tighter text-white">Histórico Cloud</h1>
              </div>
              <div className="bg-white/5 p-6 md:p-8 rounded-[2rem] md:rounded-[2.5rem] border border-white/10 md:text-right shadow-2xl w-full md:w-auto md:min-w-[320px]">
@@ -585,10 +604,60 @@ const App: React.FC = () => {
                <div className="w-full h-2 bg-white/5 rounded-full overflow-hidden border border-white/5"><div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: `${dashboardMetrics.progress}%` }}></div></div>
              </div>
            </header>
+
+           {/* History Toolbelt / Filters */}
+           <section className="bg-white/5 backdrop-blur-3xl p-6 md:p-8 rounded-[2.5rem] md:rounded-[3.5rem] border border-white/10 shadow-xl flex flex-col md:flex-row gap-6 md:items-center">
+             <div className="flex-1 relative">
+               <input 
+                 type="text" 
+                 value={filterSearch}
+                 onChange={e => setFilterSearch(e.target.value)}
+                 placeholder="Buscar cliente ou número..." 
+                 className="w-full pl-14 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-sm focus:outline-none focus:border-blue-500/50 transition-all placeholder:text-slate-600"
+               />
+               <svg className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+             </div>
+             
+             <div className="flex bg-white/5 p-1.5 rounded-2xl border border-white/10 shrink-0">
+               {(['all', 'service', 'product'] as const).map(cat => (
+                 <button 
+                   key={cat}
+                   onClick={() => setFilterCategory(cat)}
+                   className={`px-5 py-2.5 rounded-xl text-[9px] font-black uppercase tracking-widest transition-all ${filterCategory === cat ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500 hover:text-white'}`}
+                 >
+                   {cat === 'all' ? 'Todos' : cat === 'service' ? 'Serviços' : 'Produtos'}
+                 </button>
+               ))}
+             </div>
+
+             <div className="flex flex-col gap-1.5 shrink-0">
+               <input 
+                 type="month" 
+                 value={filterMonth}
+                 onChange={e => setFilterMonth(e.target.value)}
+                 className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase tracking-widest outline-none focus:border-blue-500/50 transition-all cursor-pointer"
+               />
+             </div>
+             
+             {(filterSearch || filterCategory !== 'all' || filterMonth) && (
+               <button 
+                onClick={() => { setFilterSearch(''); setFilterCategory('all'); setFilterMonth(''); }}
+                className="text-[9px] font-black text-rose-500 uppercase tracking-widest hover:text-rose-400 transition-colors"
+               >
+                 Limpar Filtros
+               </button>
+             )}
+           </section>
+
            <div className="space-y-4">
-              {history.length === 0 ? (
-                <div className="text-center py-20 md:py-40 border border-dashed border-white/10 rounded-[2rem] md:rounded-[3rem] text-slate-700 font-black uppercase tracking-widest text-xs">Nenhum documento encontrado</div>
-              ) : history.map(item => (
+              {filteredHistory.length === 0 ? (
+                <div className="text-center py-20 md:py-40 border border-dashed border-white/10 rounded-[2rem] md:rounded-[3rem] flex flex-col items-center gap-4">
+                  <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center text-slate-700">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                  </div>
+                  <p className="text-slate-700 font-black uppercase tracking-widest text-xs">Nenhum documento encontrado com estes filtros</p>
+                </div>
+              ) : filteredHistory.map(item => (
                 <div key={item.id} className="p-5 md:p-8 bg-white/5 border border-white/10 rounded-[2rem] md:rounded-[3rem] flex flex-col md:flex-row items-center group hover:bg-white/[0.08] transition-all shadow-xl gap-6 md:gap-8">
                   <div className="w-12 h-12 md:w-16 md:h-16 bg-white/5 rounded-2xl flex items-center justify-center font-black text-slate-500 group-hover:bg-blue-600/20 group-hover:text-blue-400 transition-all uppercase text-[10px] shrink-0">
                     {item.category === 'product' ? '📦' : '⚡'}
