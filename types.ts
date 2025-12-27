@@ -1,6 +1,7 @@
 
 export type InvoiceCategory = 'service' | 'product';
 export type PaymentStatus = 'pending' | 'paid';
+export type SignatureType = 'physical' | 'digital';
 
 export interface Entity {
   name: string;

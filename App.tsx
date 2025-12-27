@@ -1,8 +1,9 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment, PaymentStatus } from './types';
+import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment, PaymentStatus, SignatureType } from './types';
 import { InputGroup } from './components/InputGroup';
 import { InvoicePreview } from './components/InvoicePreview';
+import { ContractPreview } from './components/ContractPreview';
 import { ClientSearchModal } from './components/ClientSearchModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { formatCurrency, formatDate } from './utils/formatters';
@@ -191,7 +192,8 @@ const App: React.FC = () => {
     serviceDesc: '', 
     value: '', 
     paymentMethod: 'Transferência Bancária',
-    deadline: '30'
+    deadline: '30',
+    signatureType: 'physical' as SignatureType
   });
   const [isContractClientModalOpen, setIsContractClientModalOpen] = useState(false);
   const [contractClient, setContractClient] = useState<Entity | null>(null);
@@ -441,7 +443,8 @@ const App: React.FC = () => {
     setIsEmitting(true);
     await new Promise(r => setTimeout(r, 500));
     try {
-      const element = contractRef.current;
+      const element = document.getElementById('contract-capture');
+      if (!element) throw new Error("Element not found");
       const canvas = await (window as any).html2canvas(element, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
       const imgData = canvas.toDataURL('image/png');
       const { jsPDF } = (window as any).jspdf;
@@ -658,7 +661,7 @@ const App: React.FC = () => {
   const updateProvider = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, provider: { ...prev.provider, [field]: value } }));
   const updateClient = (field: keyof Entity, value: string) => setData(prev => ({ ...prev, client: { ...prev.client, [field]: value } }));
 
-  const parseContractTemplate = (template: string) => {
+  const parseContractTemplateText = (template: string) => {
     if (!contractClient) return template;
     const providerAddress = `${data.provider.street}, ${data.provider.number} - ${data.provider.city}/${data.provider.uf}`;
     const clientAddress = `${contractClient.street}, ${contractClient.number} - ${contractClient.city}/${contractClient.uf}`;
@@ -989,14 +992,30 @@ const App: React.FC = () => {
                   <InputGroup label="Prazo (Dias)" type="number" value={contractForm.deadline} onChange={e => setContractForm({...contractForm, deadline: e.target.value})} />
                 </div>
                 <InputGroup label="Forma de Pagamento" value={contractForm.paymentMethod} onChange={e => setContractForm({...contractForm, paymentMethod: e.target.value})} placeholder="Ex: PIX ou Transferência" />
+                
+                <div className="space-y-3 pt-2">
+                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Tipo de Assinatura</label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button onClick={() => setContractForm({...contractForm, signatureType: 'physical'})} className={`py-4 rounded-2xl border font-black text-[9px] uppercase tracking-widest transition-all ${contractForm.signatureType === 'physical' ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Física</button>
+                    <button onClick={() => setContractForm({...contractForm, signatureType: 'digital'})} className={`py-4 rounded-2xl border font-black text-[9px] uppercase tracking-widest transition-all ${contractForm.signatureType === 'digital' ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Digital</button>
+                  </div>
+                  <p className="text-[8px] text-slate-600 font-bold uppercase tracking-widest leading-relaxed mt-2">
+                    {contractForm.signatureType === 'digital' ? 'Selo de autenticidade será inserido no rodapé.' : 'Linhas para assinatura manual serão geradas.'}
+                  </p>
+                </div>
               </section>
               <button disabled={isEmitting} onClick={handleGenerateContract} className="w-full py-6 bg-indigo-600 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl shadow-indigo-600/20 active:scale-95 transition-all">{isEmitting ? 'Gerando...' : 'Gerar Contrato PDF'}</button>
            </aside>
-           <main className="flex-1 bg-[#020617] p-10 flex justify-center items-start overflow-y-auto overflow-x-hidden">
-              <div ref={contractRef} className="w-[800px] bg-white p-20 text-slate-900 border-[1.5px] border-black shadow-2xl origin-top scale-[0.6] sm:scale-[0.8] lg:scale-100 transition-all">
-                <div className="whitespace-pre-wrap font-serif text-sm leading-relaxed text-justify">
-                  {parseContractTemplate(CONTRACT_TEMPLATES.find(t => t.id === contractForm.templateId)?.content || '')}
-                </div>
+           <main className="flex-1 bg-[#020617] p-10 flex justify-center items-start overflow-y-auto overflow-x-hidden scrollbar-hide">
+              <div className="origin-top scale-[0.55] sm:scale-[0.75] lg:scale-[0.7] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700">
+                <ContractPreview 
+                  content={parseContractTemplateText(CONTRACT_TEMPLATES.find(t => t.id === contractForm.templateId)?.content || '')}
+                  provider={data.provider}
+                  client={contractClient}
+                  branding={data.branding}
+                  signatureType={contractForm.signatureType}
+                  docId={session.user.id}
+                />
               </div>
            </main>
            <ClientSearchModal isOpen={isContractClientModalOpen} onClose={() => setIsContractClientModalOpen(false)} clients={savedClients} onSelect={c => { setContractClient(c); setIsContractClientModalOpen(false); }} onDelete={async tid => { await supabase.from('clients').delete().match({ user_id: session.user.id, tax_id: tid }); loadClients(); }} />
