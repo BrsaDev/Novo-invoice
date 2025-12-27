@@ -4,6 +4,18 @@ export type PaymentStatus = 'pending' | 'paid';
 export type SignatureType = 'physical' | 'digital';
 export type ContractStatus = 'active' | 'finished' | 'canceled';
 export type ContractPeriodicity = 'one-time' | 'monthly' | 'periodic';
+export type ContractComplexity = 'basic' | 'intermediate' | 'advanced';
+
+export type ViewState = 'landing' | 'editor' | 'history' | 'financial-hub' | 'contracts' | 'validator';
+
+export interface ContractClauses {
+  fines: boolean;
+  resignation: boolean;
+  confidentiality: boolean;
+  intellectualProperty: boolean;
+  lgpd: boolean;
+  liabilityLimit: boolean;
+}
 
 export interface Entity {
   name: string;

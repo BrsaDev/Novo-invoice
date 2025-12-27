@@ -17,14 +17,22 @@ export const formatTaxId = (value: string): string => {
 };
 
 export const formatDate = (dateString: string): string => {
-  const [year, month, day] = dateString.split('-');
+  if (!dateString) return '-';
+  const parts = dateString.split('-');
+  if (parts.length !== 3) return dateString;
+  const [year, month, day] = parts;
   return `${day}/${month}/${year}`;
 };
 
+export const getQrCodeUrl = (data: string, size: string = "150x150"): string => {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}&data=${encodeURIComponent(data)}&color=000000&bgcolor=ffffff`;
+};
+
 export const getPixQrCodeUrl = (key: string, amount: number, name: string, city: string): string => {
-  // Simplified static QR Code API for visual representation
-  // In a real production environment, you'd use a BRCode payload generator
-  const size = "150x150";
-  const label = encodeURIComponent(`Pagamento ${formatCurrency(amount)}`);
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}&data=${encodeURIComponent(key)}&color=000000&bgcolor=ffffff`;
+  return getQrCodeUrl(key);
+};
+
+export const getContractValidationUrl = (hash: string): string => {
+  const baseUrl = window.location.origin + window.location.pathname;
+  return `${baseUrl}?v=${hash}`;
 };

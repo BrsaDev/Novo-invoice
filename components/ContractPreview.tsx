@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { Entity, SignatureType, Branding } from '../types';
-import { formatCurrency } from '../utils/formatters';
+import { getQrCodeUrl, getContractValidationUrl } from '../utils/formatters';
 
 interface ContractPreviewProps {
   content: string;
@@ -24,8 +24,8 @@ export const ContractPreview: React.FC<ContractPreviewProps> = ({
 }) => {
   const primaryColor = branding.primaryColor;
   const today = new Date().toLocaleDateString('pt-BR');
-  
   const displayHash = externalHash || (docId.split('-')[0].toUpperCase() + "REF");
+  const validationUrl = getContractValidationUrl(displayHash);
 
   const formatTaxDetails = (e: Entity) => {
     let details = `Doc: ${e.taxId}`;
@@ -44,107 +44,155 @@ export const ContractPreview: React.FC<ContractPreviewProps> = ({
     return parts.join(' - ');
   };
 
+  const paragraphs = content.split('\n\n').filter(p => p.trim() !== '');
+
   return (
-    <div id="contract-capture" className="w-[800px] min-h-[1122px] bg-white p-16 text-slate-800 shadow-2xl relative flex flex-col font-serif">
-      <header className="flex justify-between items-start mb-12 pb-8 border-b-2" style={{ borderColor: primaryColor }}>
-        <div>
+    <div 
+      id="contract-capture" 
+      className="bg-white text-slate-800 relative shadow-2xl"
+      style={{ 
+        width: '800px', 
+        minHeight: '1122px', 
+        padding: '60px', 
+        borderLeft: `15px solid ${primaryColor}`,
+        display: 'block'
+      }}
+    >
+      <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: '50px', paddingBottom: '30px', borderBottom: `2px solid ${primaryColor}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
           {branding.logoImage ? (
-            <img src={branding.logoImage} alt="Logo" className="h-16 object-contain" />
+            <img src={branding.logoImage} alt="Logo" style={{ height: '64px', objectFit: 'contain' }} />
           ) : (
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl font-black text-white" style={{ backgroundColor: primaryColor }}>
+            <div style={{ width: '64px', height: '64px', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '32px', fontWeight: '900', color: 'white', backgroundColor: primaryColor, fontFamily: 'Inter' }}>
               {branding.logoLetter}
             </div>
           )}
-          <h1 className="mt-4 text-xl font-black font-sans uppercase tracking-tighter" style={{ color: primaryColor }}>
-            {provider.name}
-          </h1>
+          <div style={{ fontFamily: 'Inter' }}>
+            <h1 style={{ fontSize: '20px', fontWeight: '900', textTransform: 'uppercase', margin: 0, color: primaryColor }}>
+              {provider.name}
+            </h1>
+            <p style={{ fontSize: '10px', fontWeight: '700', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.1em', margin: '4px 0 0 0' }}>Instrumento Particular de Contrato</p>
+          </div>
         </div>
-        <div className="text-right font-sans">
-          <h2 className="text-xs font-black uppercase tracking-[0.3em] text-slate-400 mb-1">Instrumento Particular de</h2>
-          <h3 className="text-2xl font-black uppercase tracking-tight text-slate-900">Contrato de Prestação</h3>
-          <div className="mt-4 px-3 py-1 inline-block rounded-lg text-[9px] font-bold text-white uppercase tracking-widest" style={{ backgroundColor: primaryColor }}>
+        <div style={{ textAlign: 'right', fontFamily: 'Inter' }}>
+          <h2 style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>Referência Técnica</h2>
+          <h3 style={{ fontSize: '22px', fontWeight: '900', textTransform: 'uppercase', color: '#0f172a', margin: '4px 0' }}>Contrato de Serviço</h3>
+          <div style={{ marginTop: '12px', padding: '4px 12px', display: 'inline-block', borderRadius: '8px', fontSize: '10px', fontWeight: '700', color: 'white', backgroundColor: primaryColor }}>
             Ref: {displayHash}
           </div>
         </div>
       </header>
 
-      <div className="grid grid-cols-2 gap-8 mb-12 font-sans">
-        <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
-          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-2">Contratada</span>
-          <h4 className="text-sm font-black text-slate-900 uppercase mb-2">{provider.name}</h4>
-          <p className="text-[9px] font-bold text-slate-600 mb-2">{formatTaxDetails(provider)}</p>
-          <p className="text-[10px] text-slate-500 leading-relaxed">
-            Endereço: {formatFullAddressShort(provider)}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', marginBottom: '50px', fontFamily: 'Inter' }}>
+        <div style={{ padding: '24px', backgroundColor: '#f8fafc', borderRadius: '24px', border: '1px solid #e2e8f0', position: 'relative' }}>
+          <span style={{ fontSize: '9px', fontWeight: '900', color: '#94a3b8', textTransform: 'uppercase', display: 'block', marginBottom: '12px' }}>Contratada (Prestadora)</span>
+          <h4 style={{ fontSize: '14px', fontWeight: '900', textTransform: 'uppercase', color: '#0f172a', margin: '0 0 8px 0' }}>{provider.name}</h4>
+          <p style={{ fontSize: '10px', fontWeight: '700', color: '#475569', margin: '0 0 4px 0' }}>{formatTaxDetails(provider)}</p>
+          <p style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', margin: 0, lineHeight: '1.5' }}>
+            {formatFullAddressShort(provider)}
           </p>
         </div>
-        <div className="p-6 bg-slate-50 rounded-3xl border border-slate-100">
-          <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest block mb-2">Contratante</span>
-          <h4 className="text-sm font-black text-slate-900 uppercase mb-2">{client?.name || 'A DEFINIR'}</h4>
-          {client && <p className="text-[9px] font-bold text-slate-600 mb-2">{formatTaxDetails(client)}</p>}
-          <p className="text-[10px] text-slate-500 leading-relaxed">
-            Endereço: {client ? formatFullAddressShort(client) : '-'}
+        <div style={{ padding: '24px', backgroundColor: '#f8fafc', borderRadius: '24px', border: '1px solid #e2e8f0' }}>
+          <span style={{ fontSize: '9px', fontWeight: '900', color: '#94a3b8', textTransform: 'uppercase', display: 'block', marginBottom: '12px' }}>Contratante (Cliente)</span>
+          <h4 style={{ fontSize: '14px', fontWeight: '900', textTransform: 'uppercase', color: '#0f172a', margin: '0 0 8px 0' }}>{client?.name || 'Não identificado'}</h4>
+          {client && <p style={{ fontSize: '10px', fontWeight: '700', color: '#475569', margin: '0 0 4px 0' }}>{formatTaxDetails(client)}</p>}
+          <p style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic', margin: 0, lineHeight: '1.5' }}>
+            {client ? formatFullAddressShort(client) : '-'}
           </p>
         </div>
       </div>
 
-      <main className="flex-grow text-[13px] leading-[1.8] text-justify space-y-6">
-        {content.split('\n\n').map((paragraph, idx) => {
-          if (paragraph.startsWith('CLÁUSULA') || paragraph.match(/^\d\./)) {
+      <main style={{ padding: '0 10px', display: 'block' }}>
+        {paragraphs.map((paragraph, idx) => {
+          const isClause = paragraph.trim().startsWith('CLÁUSULA') || paragraph.trim().match(/^\d\./);
+          
+          if (isClause) {
+            const lines = paragraph.split('\n');
             return (
-              <div key={idx} className="space-y-2">
-                <h5 className="font-sans font-black text-slate-900 uppercase tracking-tight border-l-4 pl-4" style={{ borderColor: primaryColor }}>
-                  {paragraph.split('\n')[0]}
+              <div key={idx} style={{ marginBottom: '32px', display: 'block', breakInside: 'avoid' }}>
+                <h5 style={{ 
+                  fontFamily: 'Inter', 
+                  fontSize: '13px', 
+                  fontWeight: '900', 
+                  textTransform: 'uppercase', 
+                  color: '#0f172a', 
+                  borderLeft: `4px solid ${primaryColor}`, 
+                  paddingLeft: '16px',
+                  marginBottom: '12px'
+                }}>
+                  {lines[0]}
                 </h5>
-                <p>{paragraph.split('\n').slice(1).join('\n')}</p>
+                <div style={{ 
+                  fontFamily: 'Merriweather', 
+                  fontSize: '14px', 
+                  lineHeight: '2.1', 
+                  textAlign: 'justify', 
+                  color: '#334155' 
+                }}>
+                  {lines.slice(1).join(' ')}
+                </div>
               </div>
             );
           }
-          return <p key={idx}>{paragraph}</p>;
+
+          return (
+            <div key={idx} style={{ 
+              marginBottom: '24px', 
+              fontFamily: 'Merriweather', 
+              fontSize: '14px', 
+              lineHeight: '2.1', 
+              textAlign: 'justify', 
+              color: '#334155',
+              display: 'block'
+            }}>
+              {paragraph}
+            </div>
+          );
         })}
       </main>
 
-      <footer className="mt-16 pt-12 border-t border-slate-100 font-sans">
+      <footer style={{ marginTop: '60px', paddingTop: '40px', borderTop: '1px solid #e2e8f0', fontFamily: 'Inter' }}>
         {signatureType === 'physical' ? (
-          <div className="grid grid-cols-2 gap-12 mt-8">
-            <div className="text-center space-y-2">
-              <div className="border-t border-slate-300 pt-3">
-                <span className="text-[10px] font-black uppercase text-slate-900">{provider.name}</span>
-                <p className="text-[8px] text-slate-400 uppercase tracking-widest">Contratada</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '60px', marginTop: '30px' }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ height: '50px', borderBottom: '2px solid #0f172a', display: 'flex', alignItems: 'end', justifyContent: 'center', paddingBottom: '8px' }}>
+                 <p style={{ fontSize: '10px', color: '#94a3b8', margin: 0 }}>Assinatura Contratada</p>
               </div>
+              <p style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', marginTop: '12px' }}>{provider.name}</p>
             </div>
-            <div className="text-center space-y-2">
-              <div className="border-t border-slate-300 pt-3">
-                <span className="text-[10px] font-black uppercase text-slate-900">{client?.name || 'CONTRATANTE'}</span>
-                <p className="text-[8px] text-slate-400 uppercase tracking-widest">Contratante</p>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{ height: '50px', borderBottom: '2px solid #0f172a', display: 'flex', alignItems: 'end', justifyContent: 'center', paddingBottom: '8px' }}>
+                 <p style={{ fontSize: '10px', color: '#94a3b8', margin: 0 }}>Assinatura Contratante</p>
               </div>
+              <p style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', marginTop: '12px' }}>{client?.name || 'CONTRATANTE'}</p>
             </div>
           </div>
         ) : (
-          <div className="bg-slate-900 p-8 rounded-[2.5rem] flex items-center justify-between text-white shadow-xl">
-            <div className="space-y-3">
-              <div className="flex items-center gap-3">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                <h5 className="text-[10px] font-black uppercase tracking-[0.2em] text-emerald-500">Protocolo de Assinatura Digital</h5>
+          <div style={{ backgroundColor: '#0f172a', padding: '30px', borderRadius: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'white' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+                <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#10b981' }}></div>
+                <span style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: '#10b981', letterSpacing: '0.2em' }}>Autenticado Digitalmente</span>
               </div>
-              <div className="font-mono text-[9px] text-slate-400 space-y-1">
-                <p>Hash de Integridade: {displayHash}-{Date.now()}</p>
-                <p>Autenticação via NovaInvoice Cloud Auth</p>
-                <p>Data de Registro: {today} às {new Date().toLocaleTimeString('pt-BR')}</p>
-                <p>IP de Origem: Requisitado pelo Usuário Autenticado</p>
+              <div style={{ fontFamily: 'monospace', fontSize: '9px', color: '#94a3b8', lineHeight: '1.6' }}>
+                <p>ID: {displayHash.toUpperCase()}-{Date.now()}</p>
+                <p>CERTIFICADO: NOVAINVOICE-PROTOCOL-v3.1</p>
+                <p>DATA: {today} • {new Date().toLocaleTimeString('pt-BR')}</p>
               </div>
             </div>
-            <div className="flex flex-col items-center gap-2">
-               <div className="w-16 h-16 bg-white rounded-xl p-1.5 shadow-lg">
-                  <svg viewBox="0 0 24 24" fill="black"><path d="M3 3h8v8H3zm2 2v4h4V5zm8-2h8v8h-8zm2 2v4h4V5zM3 13h8v8H3zm2 2v4h4v-4zm13-2h3v2h-3zm-2 2h2v2h-2zm2 2h3v2h-3zm0-2h2v2h-2zm-2 2h2v2h-2zm2-2h3v2h-3z"/></svg>
-               </div>
-               <span className="text-[7px] font-black uppercase text-slate-500 tracking-widest">Validar Documento</span>
+            <div style={{ backgroundColor: 'white', padding: '8px', borderRadius: '12px' }}>
+              <img 
+                src={getQrCodeUrl(validationUrl, "100x100")} 
+                alt="Validation QR" 
+                style={{ width: '60px', height: '60px', display: 'block' }} 
+                crossOrigin="anonymous"
+              />
             </div>
           </div>
         )}
-        <div className="mt-8 flex justify-between items-center text-[8px] font-black text-slate-300 uppercase tracking-[0.3em]">
-          <span>© NovaInvoice Contracts Premium</span>
-          <span>Página 1 de 1</span>
-          <span>Ref: {displayHash}</span>
+        <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', fontSize: '9px', fontWeight: '900', color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.3em' }}>
+          <span>NovaInvoice Contracts Premium</span>
+          <span>Selo de Integridade REF: {displayHash}</span>
         </div>
       </footer>
     </div>
