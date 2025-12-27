@@ -284,7 +284,7 @@ const App: React.FC = () => {
         branding: {
           primaryColor: profile.primary_color || INITIAL_BRANDING.primaryColor,
           secondaryColor: profile.secondary_color || INITIAL_BRANDING.secondaryColor,
-          logoLetter: profile.logo_letter || INITIAL_BRANDING.logoLetter,
+          logo_letter: profile.logo_letter || INITIAL_BRANDING.logoLetter,
           logoImage: profile.logo_base64 || INITIAL_BRANDING.logoImage,
           template: (profile.template as any) || INITIAL_BRANDING.template,
         }
@@ -375,7 +375,6 @@ const App: React.FC = () => {
     baseExpensesForIcons.forEach(e => categoryTotals[e.category] = (categoryTotals[e.category] || 0) + e.amount);
 
     const faturamentoBruto = relevantHistory.reduce((acc, curr) => acc + curr.totalValue, 0);
-    // Custo Operacional agora apenas abate o que está como PAGO
     const custoOperacional = relevantExpenses
       .filter(e => e.status === 'paid')
       .reduce((acc, curr) => acc + curr.amount, 0);
@@ -388,7 +387,6 @@ const App: React.FC = () => {
     const avgMonthly = totalAnnualRevenue / currentMonthNum;
     const projectedYearEnd = avgMonthly * 12;
 
-    // CRM Logic
     const clientRankingMap: Record<string, { total: number, count: number, lastDate: number }> = {};
     history.forEach(h => {
       if (!clientRankingMap[h.clientName]) clientRankingMap[h.clientName] = { total: 0, count: 0, lastDate: 0 };
@@ -707,17 +705,135 @@ const App: React.FC = () => {
   };
 
   if (!session) return (
-    <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-700">
-      <div className="max-w-md w-full space-y-8 bg-[#0f172a]/80 backdrop-blur-3xl p-10 rounded-[3rem] border border-white/10 shadow-2xl">
-        <div className="w-20 h-20 bg-blue-600 rounded-[2rem] mx-auto flex items-center justify-center text-4xl font-black shadow-xl shadow-blue-600/30">N</div>
-        <h1 className="text-4xl font-black text-white tracking-tighter">NovaInvoice</h1>
-        <form onSubmit={handleAuth} className="space-y-6">
-          {authMode === 'signup' && <InputGroup label="Nome Completo" value={userName} onChange={e => setUserName(e.target.value)} />}
-          <InputGroup label="E-mail" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} />
-          <InputGroup label="Senha" type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)} />
-          <button disabled={isLoggingIn} type="submit" className="w-full py-5 bg-blue-600 text-white font-black rounded-2xl uppercase tracking-widest active:scale-95 transition-all">{isLoggingIn ? '...' : (authMode === 'login' ? 'Entrar' : 'Cadastrar')}</button>
-        </form>
-        <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-[10px] text-slate-500 font-black uppercase tracking-widest">{authMode === 'login' ? 'Criar conta' : 'Já tenho conta'}</button>
+    <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center justify-start lg:justify-center p-6 py-12 lg:py-16 relative overflow-x-hidden">
+      {/* Background Orbs */}
+      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 blur-[150px] rounded-full bg-orb"></div>
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[150px] rounded-full bg-orb" style={{ animationDelay: '2s' }}></div>
+
+      <div className="max-w-7xl w-full grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20 items-center z-10">
+        
+        {/* Left Side: The Pitch */}
+        <div className="space-y-12 animate-in slide-in-from-left-10 duration-1000">
+          <header className="space-y-6">
+            <div className="w-20 h-20 bg-blue-600 rounded-[2rem] flex items-center justify-center text-4xl font-black shadow-xl shadow-blue-600/30">N</div>
+            <h1 className="text-5xl md:text-8xl font-black tracking-tighter leading-tight">
+              Gestão <span className="text-blue-500">Premium</span><br/>para o seu MEI.
+            </h1>
+            <p className="text-lg md:text-2xl text-slate-400 font-medium leading-relaxed max-w-lg">
+              Pare de perder tempo com planilhas. Emita notas, gerencie despesas e gere contratos em segundos.
+            </p>
+          </header>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-10">
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-blue-500">✨</div>
+              <div>
+                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Notas em Segundos</h4>
+                <p className="text-slate-500 text-sm mt-1">PDFs profissionais e automáticos para seus clientes.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-emerald-500">📊</div>
+              <div>
+                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Lucro Real</h4>
+                <p className="text-slate-500 text-sm mt-1">Visão clara do seu saldo após despesas pagas.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-indigo-500">⚖️</div>
+              <div>
+                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Contratos Prontos</h4>
+                <p className="text-slate-500 text-sm mt-1">Templates jurídicos para fechar negócios com segurança.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-rose-500">🏛️</div>
+              <div>
+                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Monitor DAS</h4>
+                <p className="text-slate-500 text-sm mt-1">Controle suas obrigações mensais sem estresse.</p>
+              </div>
+            </div>
+            {/* New Features Added Here */}
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-emerald-400">📱</div>
+              <div>
+                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Envio via WhatsApp</h4>
+                <p className="text-slate-500 text-sm mt-1">Compartilhe links de faturas diretamente pelo celular.</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-4">
+              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-amber-500">🎯</div>
+              <div>
+                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Radar de Teto MEI</h4>
+                <p className="text-slate-500 text-sm mt-1">Projeção inteligente contra o limite de faturamento.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 flex items-center gap-4 border-t border-white/5 w-fit">
+            <div className="flex -space-x-3">
+              {[1,2,3,4].map(i => <div key={i} className="w-10 h-10 rounded-full border-2 border-[#020617] bg-slate-800 flex items-center justify-center text-[10px] font-bold">👤</div>)}
+            </div>
+            <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Junte-se a +500 MEIs organizados</p>
+          </div>
+        </div>
+
+        {/* Right Side: The Action (Login/Signup Card) */}
+        <div className="flex justify-center animate-in slide-in-from-right-10 duration-1000">
+          <div className="w-full max-w-md bg-[#0f172a]/40 backdrop-blur-3xl p-8 md:p-12 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
+            {/* Free Trial Badge */}
+            <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-6 py-3 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-500/20 z-20 whitespace-nowrap">
+              Degustação: 30 Dias Grátis
+            </div>
+
+            <div className="space-y-10">
+              <header className="text-center space-y-2">
+                <h2 className="text-3xl font-black tracking-tight">{authMode === 'login' ? 'Bem-vindo de volta' : 'Crie sua conta'}</h2>
+                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Acesse o ecossistema NovaInvoice</p>
+              </header>
+
+              <form onSubmit={handleAuth} className="space-y-6">
+                {authMode === 'signup' && (
+                  <div className="space-y-1">
+                    <InputGroup label="Como quer ser chamado?" value={userName} onChange={e => setUserName(e.target.value)} placeholder="Seu Nome Completo" />
+                  </div>
+                )}
+                <InputGroup label="Seu E-mail" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="email@exemplo.com" />
+                <InputGroup label="Sua Senha" type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" />
+                
+                <div className="pt-4">
+                  <button 
+                    disabled={isLoggingIn} 
+                    type="submit" 
+                    className={`w-full py-5 rounded-2xl text-white font-black uppercase text-[11px] tracking-[0.3em] shadow-2xl active:scale-95 transition-all ${
+                      authMode === 'login' 
+                      ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/20' 
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-90 shadow-indigo-600/20'
+                    }`}
+                  >
+                    {isLoggingIn ? 'Processando...' : (authMode === 'login' ? 'Entrar no Sistema' : 'Ativar meu Teste Grátis')}
+                  </button>
+                </div>
+              </form>
+
+              <div className="text-center space-y-6">
+                <button 
+                  onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} 
+                  className="text-[10px] text-slate-400 hover:text-white font-black uppercase tracking-widest transition-all"
+                >
+                  {authMode === 'login' ? 'Não tem conta? Cadastre-se' : 'Já tem conta? Faça login'}
+                </button>
+                
+                <div className="pt-6 border-t border-white/5">
+                  <p className="text-[9px] text-slate-600 font-bold uppercase tracking-widest leading-relaxed">
+                    Ao se cadastrar, você concorda com nossos termos. <br/>
+                    <span className="text-emerald-500/60">Acesso Premium liberado • Sem Cartão • Instantâneo</span>
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -853,7 +969,7 @@ const App: React.FC = () => {
         </div>
       ) : view === 'contracts' ? (
         <div className="flex flex-col lg:flex-row h-screen animate-in fade-in duration-500">
-           <aside className="w-full lg:w-[450px] bg-[#0f172a] border-r border-white/10 p-8 space-y-8 overflow-y-auto no-print">
+           <aside className="w-full lg:w-[450px] bg-[#0f172a] border-r border-white/10 p-8 space-y-8 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#0f172a]">
               <button onClick={() => setView('landing')} className="text-indigo-400 text-[10px] font-black uppercase mb-4">← Voltar</button>
               <h2 className="text-3xl font-black text-white tracking-tighter">Novo Contrato</h2>
               <section className="space-y-6">
