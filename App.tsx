@@ -249,6 +249,7 @@ const App: React.FC = () => {
 
   const invoiceRef = useRef<HTMLDivElement>(null);
   const contractRef = useRef<HTMLDivElement>(null);
+  const meiReportRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const whatsappTextAreaRef = useRef<HTMLTextAreaElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
@@ -696,19 +697,111 @@ const App: React.FC = () => {
         return d.getFullYear() === parseInt(year) && (d.getMonth() + 1) === parseInt(month);
     });
     const filteredExp = expenses.filter(e => e.date.startsWith(exportMonth));
+    
     if (filteredHist.length === 0 && filteredExp.length === 0) return showToast('Sem dados para exportar neste mês.', 'error');
-    let content = `RELATÓRIO MENSAL - ${month}/${year}\nGERADO POR: ${data.provider.name}\n--------------------------------------------------\n\nDOCS EMITIDOS:\n`;
-    filteredHist.forEach(h => content += `${new Date(h.timestamp).toLocaleDateString('pt-BR')} | ${h.data.invoiceNumber} | ${h.clientName} | ${formatCurrency(h.totalValue)} | ${h.status.toUpperCase()}\n`);
-    content += `TOTAL EMISSÕES: ${formatCurrency(filteredHist.reduce((a,b) => a+b.totalValue, 0))}\n\nDESPESAS REGISTRADAS:\n`;
-    filteredExp.forEach(e => content += `${formatDate(e.date)} | ${e.description} | ${e.category} | ${formatCurrency(e.amount)} | ${e.status.toUpperCase()}\n`);
-    content += `TOTAL DESPESAS: ${formatCurrency(filteredExp.reduce((a,b) => a+b.amount, 0))}\n`;
-    const blob = new Blob([content], { type: 'text/plain' });
+
+    // CSV Header for Revenues
+    let csvContent = `RELATORIO MENSAL DE FATURAMENTO;MEI: ${data.provider.name};CNPJ: ${data.provider.taxId};PERIODO: ${month}/${year}\n\n`;
+    
+    // Revenue Section (Services and Products)
+    csvContent += "NOTAS FISCAIS E RECIBOS EMITIDOS (RECEITA BRUTA)\n";
+    csvContent += "Data;Numero;Cliente;CNPJ/CPF;Tipo;Valor Bruto;Desconto;Retencoes;Valor Liquido;Status;Observacoes\n";
+    
+    filteredHist.forEach(h => {
+      const hDate = new Date(h.timestamp).toLocaleDateString('pt-BR');
+      const hType = h.category === 'service' ? 'Servico' : 'Venda/Produto';
+      const hStatus = h.status === 'paid' ? 'PAGO' : 'PENDENTE';
+      const subtotal = h.data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
+      const totalTaxes = (Object.values(h.data.taxes || {}) as number[]).reduce((a, b) => a + b, 0);
+      const row = [
+        hDate,
+        h.data.invoiceNumber,
+        h.clientName,
+        h.data.client.taxId,
+        hType,
+        subtotal.toFixed(2).replace('.', ','),
+        (h.data.discount || 0).toFixed(2).replace('.', ','),
+        totalTaxes.toFixed(2).replace('.', ','),
+        h.totalValue.toFixed(2).replace('.', ','),
+        hStatus,
+        (h.data.notes || "").replace(/;/g, ",").replace(/\n/g, " ")
+      ];
+      csvContent += row.join(';') + '\n';
+    });
+    
+    const totalRev = filteredHist.reduce((a, b) => a + b.totalValue, 0);
+    csvContent += `\nTOTAL RECEITA BRUTA MENSAL;;;;;${totalRev.toFixed(2).replace('.', ',')}\n\n`;
+
+    // Expense Section
+    csvContent += "DEDUCOES E CUSTOS OPERACIONAIS (DESPESAS)\n";
+    csvContent += "Data;Descricao;Categoria;Valor;Status\n";
+    filteredExp.forEach(e => {
+      const eDate = new Date(e.date + 'T00:00:00').toLocaleDateString('pt-BR');
+      const eStatus = e.status === 'paid' ? 'PAGO' : 'PENDENTE';
+      const row = [
+        eDate,
+        e.description,
+        e.category,
+        e.amount.toFixed(2).replace('.', ','),
+        eStatus
+      ];
+      csvContent += row.join(';') + '\n';
+    });
+
+    const totalExp = filteredExp.reduce((a, b) => a + b.amount, 0);
+    csvContent += `\nTOTAL DESPESAS MENSAL;;;${totalExp.toFixed(2).replace('.', ',')}\n`;
+
+    // Add Byte Order Mark (BOM) for Excel compatibility with UTF-8
+    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Pack_Contador_${month}_${year}.txt`;
+    link.setAttribute('download', `Pack_Contador_${month}_${year}.csv`);
+    document.body.appendChild(link);
     link.click();
-    showToast('Pack do Contador exportado!', 'success');
+    document.body.removeChild(link);
+    
+    showToast('Pack do Contador exportado como Planilha!', 'success');
+  };
+
+  const handleGenerateMeiReportPdf = async () => {
+    const [year, month] = exportMonth.split('-');
+    const filteredHist = history.filter(h => {
+        const d = new Date(h.timestamp);
+        return d.getFullYear() === parseInt(year) && (d.getMonth() + 1) === parseInt(month);
+    });
+
+    const serviceTotal = filteredHist.filter(h => h.category === 'service').reduce((acc, curr) => acc + curr.totalValue, 0);
+    const commerceTotal = filteredHist.filter(h => h.category === 'product').reduce((acc, curr) => acc + curr.totalValue, 0);
+
+    setIsEmitting(true);
+    await new Promise(r => setTimeout(r, 500));
+
+    try {
+      const element = document.getElementById('mei-report-capture');
+      if (!element) throw new Error("Element not found");
+      
+      const canvas = await (window as any).html2canvas(element, { 
+        scale: 2, 
+        useCORS: true, 
+        backgroundColor: '#ffffff' 
+      });
+      
+      const imgData = canvas.toDataURL('image/png');
+      const { jsPDF } = (window as any).jspdf;
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Relatorio_MEI_${month}_${year}.pdf`);
+      showToast('Relatório Mensal MEI gerado com sucesso.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Erro ao gerar relatório PDF.', 'error');
+    } finally {
+      setIsEmitting(false);
+    }
   };
 
   const handlePrint = async () => {
@@ -873,6 +966,79 @@ const App: React.FC = () => {
   const currentPrice = userCount < 500 ? 16.90 : 24.90;
   const dailyPrice = (currentPrice / 30).toFixed(2).replace('.', ',');
   const remainingSpots = Math.max(0, 500 - userCount);
+
+  // Mei Report Component (Hidden for capture)
+  const MeiReportForm = () => {
+      const [year, month] = exportMonth.split('-');
+      const monthName = new Intl.DateTimeFormat('pt-BR', { month: 'long' }).format(new Date(parseInt(year), parseInt(month) - 1, 1));
+      const filteredHist = history.filter(h => {
+          const d = new Date(h.timestamp);
+          return d.getFullYear() === parseInt(year) && (d.getMonth() + 1) === parseInt(month);
+      });
+      const serviceTotal = filteredHist.filter(h => h.category === 'service').reduce((acc, curr) => acc + curr.totalValue, 0);
+      const commerceTotal = filteredHist.filter(h => h.category === 'product').reduce((acc, curr) => acc + curr.totalValue, 0);
+      const grandTotal = serviceTotal + commerceTotal;
+
+      const TableRow = ({ label, value, bold = false }: { label: string, value: number, bold?: boolean }) => (
+          <div className={`grid grid-cols-12 border-b border-black ${bold ? 'font-black' : ''}`}>
+              <div className="col-span-10 p-2 border-r border-black text-[10px] uppercase">{label}</div>
+              <div className="col-span-2 p-2 text-[10px] text-right">{formatCurrency(value)}</div>
+          </div>
+      );
+
+      return (
+          <div id="mei-report-capture" className="w-[800px] bg-white p-12 text-black font-sans border-2 border-black" style={{ position: 'absolute', left: '-9999px', top: 0 }}>
+              <div className="text-center border-b-2 border-black pb-4 mb-6">
+                  <h1 className="text-lg font-black uppercase">Relatório Mensal das Receitas Brutas</h1>
+                  <p className="text-[10px] font-bold uppercase">(Art. 7º da Resolução CGSN nº 10/2007)</p>
+              </div>
+              
+              <div className="space-y-4 mb-8">
+                  <div className="flex gap-4 border border-black p-2">
+                      <div className="flex-1 text-[10px] uppercase"><strong>CNPJ:</strong> {data.provider.taxId}</div>
+                      <div className="flex-1 text-[10px] uppercase"><strong>Empreendedor:</strong> {data.provider.name}</div>
+                  </div>
+                  <div className="border border-black p-2 text-[10px] uppercase">
+                      <strong>Período de Apuração:</strong> {monthName.toUpperCase()} / {year}
+                  </div>
+              </div>
+
+              <div className="border-t border-l border-r border-black mb-10">
+                  <div className="grid grid-cols-12 bg-gray-100 border-b border-black font-black">
+                      <div className="col-span-10 p-2 border-r border-black text-[10px] uppercase text-center">Discriminação das Receitas Brutas</div>
+                      <div className="col-span-2 p-2 text-[10px] text-center">Valor (R$)</div>
+                  </div>
+                  <TableRow label="I - Revenda de mercadorias com documento fiscal (Comércio)" value={commerceTotal} />
+                  <TableRow label="II - Revenda de mercadorias sem documento fiscal (Comércio)" value={0} />
+                  <TableRow label="III - Total das receitas com revenda de mercadorias (I + II)" value={commerceTotal} bold />
+                  <TableRow label="IV - Venda de produtos industrializados com documento fiscal (Indústria)" value={0} />
+                  <TableRow label="V - Venda de produtos industrializados sem documento fiscal (Indústria)" value={0} />
+                  <TableRow label="VI - Total das receitas com venda de produtos industrializados (IV + V)" value={0} bold />
+                  <TableRow label="VII - Prestação de serviços com documento fiscal" value={serviceTotal} />
+                  <TableRow label="VIII - Prestação de serviços sem documento fiscal" value={0} />
+                  <TableRow label="IX - Total das receitas com prestação de serviços (VII + VIII)" value={serviceTotal} bold />
+                  <TableRow label="X - Total Geral das receitas brutas no mês (III + VI + IX)" value={grandTotal} bold />
+              </div>
+
+              <div className="mt-20 space-y-12">
+                  <div className="flex justify-between items-end gap-10">
+                      <div className="flex-1 border-b border-black pb-1 text-[10px] uppercase text-center">
+                          {data.provider.city || 'Local'}, {new Date().toLocaleDateString('pt-BR')}
+                      </div>
+                      <div className="flex-1 border-b border-black pb-1 text-[10px] uppercase text-center">
+                          Assinatura do Empreendedor Individual
+                      </div>
+                  </div>
+                  <div className="border border-black p-4 text-[9px] text-justify leading-tight italic">
+                      Este relatório deve ser preenchido até o dia 20 do mês subsequente àquele em que houver sido auferida a receita bruta, e mantido em poder do MEI, acompanhado das notas fiscais de compras e vendas, pelo prazo de 5 (cinco) anos.
+                  </div>
+              </div>
+              <footer className="mt-8 pt-4 border-t border-gray-200 text-center text-[8px] uppercase font-black text-gray-400">
+                  Documento Gerado via NovaInvoice Premium Cloud • © 2025
+              </footer>
+          </div>
+      );
+  };
 
   if (!session) return (
     <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center relative overflow-x-hidden scroll-smooth">
@@ -1488,7 +1654,10 @@ const App: React.FC = () => {
                         <h3 className="text-xl font-black text-white uppercase tracking-tight">Pack Contador</h3>
                         <div className="w-full space-y-4">
                             <input type="month" value={exportMonth} onChange={e => setExportMonth(e.target.value)} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-[11px] font-black outline-none text-center" />
-                            <button onClick={handleExportPack} className="w-full py-4 bg-white/10 hover:bg-white/20 border border-white/10 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl transition-all">Baixar .TXT</button>
+                            <div className="flex flex-col gap-2">
+                                <button onClick={handleExportPack} className="w-full py-4 bg-white/10 hover:bg-white/20 border border-white/10 text-white font-black text-[10px] uppercase tracking-widest rounded-2xl transition-all">Baixar Planilha (.CSV)</button>
+                                <button onClick={handleGenerateMeiReportPdf} className="w-full py-4 bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-600/30 text-emerald-400 font-black text-[10px] uppercase tracking-widest rounded-2xl transition-all">Gerar Relatório MEI (PDF)</button>
+                            </div>
                         </div>
                     </div>
                 </section>
@@ -1695,6 +1864,7 @@ const App: React.FC = () => {
         </div>
       )}
       <ClientSearchModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} clients={savedClients} onSelect={c => { setData({ ...data, client: c }); setIsModalOpen(false); }} onDelete={async tid => { await supabase.from('clients').delete().match({ user_id: session.user.id, tax_id: tid }); loadClients(); }} />
+      <MeiReportForm />
     </div>
   );
 };
