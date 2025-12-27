@@ -180,13 +180,12 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<InvoiceHistoryItem[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [dasPayments, setDasPayments] = useState<DasPayment[]>([]);
+  const [userCount, setUserCount] = useState(0);
   
-  // WhatsApp Modal State
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [whatsAppRecipientPhone, setWhatsAppRecipientPhone] = useState('');
   const [linkCopied, setLinkCopied] = useState(false);
 
-  // Contracts State
   const [contractForm, setContractForm] = useState({ 
     templateId: CONTRACT_TEMPLATES[0].id, 
     serviceDesc: '', 
@@ -198,18 +197,15 @@ const App: React.FC = () => {
   const [isContractClientModalOpen, setIsContractClientModalOpen] = useState(false);
   const [contractClient, setContractClient] = useState<Entity | null>(null);
   
-  // States for History Filters
   const [filterSearch, setFilterSearch] = useState('');
   const [filterCategory, setFilterCategory] = useState<'all' | 'service' | 'product'>('all');
   const [filterMonth, setFilterMonth] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'paid'>('all');
 
-  // States for Expense Filters
   const [expFilterSearch, setExpFilterSearch] = useState('');
   const [expFilterCategory, setExpFilterCategory] = useState('all');
   const [expFilterMonth, setExpFilterMonth] = useState('');
 
-  // States for Analytics/DASN Filters
   const [analyticsYear, setAnalyticsYear] = useState(new Date().getFullYear());
   const [exportMonth, setExportMonth] = useState(`${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`);
 
@@ -252,6 +248,13 @@ const App: React.FC = () => {
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+    
+    const fetchStats = async () => {
+      const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+      if (count !== null) setUserCount(count);
+    };
+    fetchStats();
+
     return () => subscription.unsubscribe();
   }, []);
 
@@ -472,7 +475,7 @@ const App: React.FC = () => {
       pix_key: data.provider.pixKey,
       primary_color: data.branding.primaryColor,
       secondary_color: data.branding.secondaryColor,
-      logo_letter: data.branding.logoLetter,
+      logo_letter: data.branding.logo_letter,
       template: data.branding.template,
       updated_at: new Date().toISOString()
     }, { onConflict: 'user_id' });
@@ -707,137 +710,272 @@ const App: React.FC = () => {
     }
   };
 
+  const scrollToId = (id: string) => {
+    const element = document.getElementById(id);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth' });
+    }
+  };
+
+  const currentPrice = userCount < 500 ? 16.90 : 24.90;
+  const dailyPrice = (currentPrice / 30).toFixed(2).replace('.', ',');
+  const remainingSpots = Math.max(0, 500 - userCount);
+
   if (!session) return (
-    <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center justify-start lg:justify-center p-6 py-12 lg:py-16 relative overflow-x-hidden">
-      {/* Background Orbs */}
-      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-600/10 blur-[150px] rounded-full bg-orb"></div>
-      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[150px] rounded-full bg-orb" style={{ animationDelay: '2s' }}></div>
+    <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center relative overflow-x-hidden scroll-smooth">
+      <div className="fixed top-[-10%] left-[-10%] w-[60%] h-[60%] bg-blue-600/10 blur-[150px] rounded-full bg-orb pointer-events-none"></div>
+      <div className="fixed bottom-[-10%] right-[-10%] w-[60%] h-[60%] bg-indigo-600/10 blur-[150px] rounded-full bg-orb pointer-events-none" style={{ animationDelay: '2s' }}></div>
 
-      <div className="max-w-7xl w-full grid grid-cols-1 lg:grid-cols-2 gap-12 lg:gap-20 items-center z-10">
-        
-        {/* Left Side: The Pitch */}
-        <div className="space-y-12 animate-in slide-in-from-left-10 duration-1000">
-          <header className="space-y-6">
-            <div className="w-20 h-20 bg-blue-600 rounded-[2rem] flex items-center justify-center text-4xl font-black shadow-xl shadow-blue-600/30">N</div>
-            <h1 className="text-5xl md:text-8xl font-black tracking-tighter leading-tight">
-              Gestão <span className="text-blue-500">Premium</span><br/>para o seu MEI.
-            </h1>
-            <p className="text-lg md:text-2xl text-slate-400 font-medium leading-relaxed max-w-lg">
-              Pare de perder tempo com planilhas. Emita notas, gerencie despesas e gere contratos em segundos.
-            </p>
-          </header>
+      <section className="min-h-screen w-full flex flex-col items-center justify-center px-6 py-20 relative z-10 max-w-7xl">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-24 items-center">
+          
+          <div className="space-y-12 animate-in slide-in-from-left-10 duration-1000">
+            <header className="space-y-8">
+              <div className="w-20 h-20 bg-blue-600 rounded-[2rem] flex items-center justify-center text-4xl font-black shadow-xl shadow-blue-600/30">N</div>
+              <div className="space-y-4">
+                <span className="px-4 py-1.5 bg-blue-500/10 border border-blue-500/20 rounded-full text-[10px] font-black text-blue-400 uppercase tracking-widest">Acesso Fundador Liberado</span>
+                <h1 className="text-6xl md:text-8xl font-black tracking-tighter leading-tight">
+                  Status <span className="text-blue-500">Premium</span><br/>para o seu faturamento.
+                </h1>
+                <p className="text-xl md:text-2xl text-slate-400 font-medium leading-relaxed max-w-lg">
+                  Mais que um emissor. Uma grife visual para seus documentos e controle absoluto do seu teto MEI.
+                </p>
+              </div>
+            </header>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-10">
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-blue-500">✨</div>
-              <div>
-                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Notas em Segundos</h4>
-                <p className="text-slate-500 text-sm mt-1">PDFs profissionais e automáticos para seus clientes.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-emerald-500">📊</div>
-              <div>
-                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Lucro Real</h4>
-                <p className="text-slate-500 text-sm mt-1">Visão clara do seu saldo após despesas pagas.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-indigo-500">⚖️</div>
-              <div>
-                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Contratos Prontos</h4>
-                <p className="text-slate-500 text-sm mt-1">Templates jurídicos para fechar negócios com segurança.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-rose-500">🏛️</div>
-              <div>
-                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Monitor DAS</h4>
-                <p className="text-slate-500 text-sm mt-1">Controle suas obrigações mensais sem estresse.</p>
-              </div>
-            </div>
-            {/* New Features Added Here */}
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-emerald-400">📱</div>
-              <div>
-                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Envio via WhatsApp</h4>
-                <p className="text-slate-500 text-sm mt-1">Compartilhe links de faturas diretamente pelo celular.</p>
-              </div>
-            </div>
-            <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 text-amber-500">🎯</div>
-              <div>
-                <h4 className="font-bold text-white uppercase text-xs tracking-widest">Radar de Teto MEI</h4>
-                <p className="text-slate-500 text-sm mt-1">Projeção inteligente contra o limite de faturamento.</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="pt-4 flex items-center gap-4 border-t border-white/5 w-fit">
-            <div className="flex -space-x-3">
-              {[1,2,3,4].map(i => <div key={i} className="w-10 h-10 rounded-full border-2 border-[#020617] bg-slate-800 flex items-center justify-center text-[10px] font-bold">👤</div>)}
-            </div>
-            <p className="text-xs font-black text-slate-500 uppercase tracking-widest">Junte-se a +500 MEIs organizados</p>
-          </div>
-        </div>
-
-        {/* Right Side: The Action (Login/Signup Card) */}
-        <div className="flex justify-center animate-in slide-in-from-right-10 duration-1000">
-          <div className="w-full max-w-md bg-[#0f172a]/40 backdrop-blur-3xl p-8 md:p-12 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
-            {/* Free Trial Badge */}
-            <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-6 py-3 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-500/20 z-20 whitespace-nowrap">
-              Degustação: 30 Dias Grátis
-            </div>
-
-            <div className="space-y-10">
-              <header className="text-center space-y-2">
-                <h2 className="text-3xl font-black tracking-tight">{authMode === 'login' ? 'Bem-vindo de volta' : 'Crie sua conta'}</h2>
-                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Acesse o ecossistema NovaInvoice</p>
-              </header>
-
-              <form onSubmit={handleAuth} className="space-y-6">
-                {authMode === 'signup' && (
-                  <div className="space-y-1">
-                    <InputGroup label="Como quer ser chamado?" value={userName} onChange={e => setUserName(e.target.value)} placeholder="Seu Nome Completo" />
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-10 border-t border-white/5 pt-12">
+              {[
+                { label: "Layout de Grife", desc: "Notas e contratos autoritários.", icon: "✨", color: "text-blue-500" },
+                { label: "Radar DASN", desc: "Controle automático do teto MEI.", icon: "📊", color: "text-emerald-500" },
+                { label: "Envio WhatsApp", desc: "Envie PDF direto para o cliente.", icon: "📱", color: "text-emerald-400" },
+                { label: "Assinatura Digital", desc: "Contratos válidos juridicamente.", icon: "✍️", color: "text-indigo-500" },
+                { label: "Gestão Financeira", desc: "Controle gastos e lucro real.", icon: "💰", color: "text-amber-500" },
+                { label: "Cloud Backup", desc: "Seus dados seguros em nuvem.", icon: "☁️", color: "text-blue-400" },
+              ].map(feat => (
+                <div key={feat.label} className="flex items-start gap-4 group">
+                  <div className={`w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center shrink-0 border border-white/10 ${feat.color} group-hover:scale-110 transition-transform`}>{feat.icon}</div>
+                  <div>
+                    <h4 className="font-bold text-white uppercase text-[10px] tracking-widest">{feat.label}</h4>
+                    <p className="text-slate-500 text-[11px] mt-1 leading-tight">{feat.desc}</p>
                   </div>
-                )}
-                <InputGroup label="Seu E-mail" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="email@exemplo.com" />
-                <InputGroup label="Sua Senha" type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" />
-                
-                <div className="pt-4">
-                  <button 
-                    disabled={isLoggingIn} 
-                    type="submit" 
-                    className={`w-full py-5 rounded-2xl text-white font-black uppercase text-[11px] tracking-[0.3em] shadow-2xl active:scale-95 transition-all ${
-                      authMode === 'login' 
-                      ? 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/20' 
-                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-90 shadow-indigo-600/20'
-                    }`}
-                  >
-                    {isLoggingIn ? 'Processando...' : (authMode === 'login' ? 'Entrar no Sistema' : 'Ativar meu Teste Grátis')}
+                </div>
+              ))}
+            </div>
+            
+            <button onClick={() => scrollToId('auth-form')} className="inline-flex items-center gap-4 group">
+               <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center border border-white/10 group-hover:bg-blue-600 group-hover:border-blue-500 transition-all">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="group-hover:translate-y-1 transition-transform"><path d="M7 13l5 5 5-5M7 6l5 5 5-5"/></svg>
+               </div>
+               <span className="text-xs font-black uppercase tracking-[0.3em] text-slate-500 group-hover:text-white transition-colors">Conheça os detalhes abaixo</span>
+            </button>
+          </div>
+
+          <div className="flex justify-center animate-in slide-in-from-right-10 duration-1000">
+            <div id="auth-form" className="w-full max-w-md bg-[#0f172a]/40 backdrop-blur-3xl p-8 md:p-12 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
+              <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-6 py-3 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-500/20 z-20 whitespace-nowrap">
+                {remainingSpots > 0 ? `Restam ${remainingSpots} Vagas Fundador` : 'Assinatura Padrão Ativa'}
+              </div>
+
+              <div className="space-y-10">
+                <header className="text-center space-y-2">
+                  <h2 className="text-3xl font-black tracking-tight">{authMode === 'login' ? 'Bem-vindo' : 'Crie sua conta'}</h2>
+                  <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Entre no ecossistema NovaInvoice</p>
+                </header>
+
+                <form onSubmit={handleAuth} className="space-y-6">
+                  {authMode === 'signup' && (
+                    <InputGroup label="Como quer ser chamado?" value={userName} onChange={e => setUserName(e.target.value)} placeholder="Seu Nome Completo" />
+                  )}
+                  <InputGroup label="E-mail" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="email@exemplo.com" />
+                  <InputGroup label="Senha" type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" />
+                  
+                  <div className="pt-4">
+                    <button 
+                      disabled={isLoggingIn} 
+                      type="submit" 
+                      className="w-full py-5 rounded-2xl text-white font-black uppercase text-[11px] tracking-[0.3em] shadow-2xl active:scale-95 transition-all bg-blue-600 hover:bg-blue-500 shadow-blue-600/20"
+                    >
+                      {isLoggingIn ? 'Processando...' : (authMode === 'login' ? 'Entrar no Sistema' : 'Ativar Minha Conta')}
+                    </button>
+                  </div>
+                </form>
+
+                <div className="text-center space-y-6">
+                  <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-[10px] text-slate-400 hover:text-white font-black uppercase tracking-widest transition-all">
+                    {authMode === 'login' ? 'Não tem conta? Cadastre-se' : 'Já tem conta? Faça login'}
                   </button>
                 </div>
-              </form>
-
-              <div className="text-center space-y-6">
-                <button 
-                  onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} 
-                  className="text-[10px] text-slate-400 hover:text-white font-black uppercase tracking-widest transition-all"
-                >
-                  {authMode === 'login' ? 'Não tem conta? Cadastre-se' : 'Já tem conta? Faça login'}
-                </button>
-                
-                <div className="pt-6 border-t border-white/5">
-                  <p className="text-[9px] text-slate-600 font-bold uppercase tracking-widest leading-relaxed">
-                    Ao se cadastrar, você concorda com nossos termos. <br/>
-                    <span className="text-emerald-500/60">Acesso Premium liberado • Sem Cartão • Instantâneo</span>
-                  </p>
-                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
+      </section>
+
+      <section className="w-full py-32 px-6 z-10 max-w-7xl">
+         <div className="text-center space-y-6 mb-24">
+            <h2 className="text-4xl md:text-6xl font-black tracking-tighter">Sua imagem vale quanto você cobra.</h2>
+            <p className="text-slate-500 font-bold uppercase tracking-[0.3em] text-[10px]">Compare a diferença visual de um MEI NovaInvoice</p>
+         </div>
+         
+         <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+            {/* CARD GENERICO */}
+            <div className="p-10 bg-white/[0.02] border border-white/5 rounded-[4rem] space-y-12 relative overflow-hidden group">
+               <div className="flex items-center gap-4">
+                  <div className="w-1.5 h-6 bg-rose-500 rounded-full"></div>
+                  <h3 className="text-xl font-black uppercase tracking-tight text-white/40">O MEI Genérico</h3>
+               </div>
+               
+               <div className="relative">
+                 {/* MOCKUP .TXT DINAMICO */}
+                 <div className="bg-[#e2e8f0] p-8 rounded-xl border-4 border-slate-300 opacity-50 grayscale group-hover:grayscale-0 transition-all duration-700 shadow-inner font-mono text-[10px] text-slate-800 leading-relaxed min-h-[220px]">
+                    <div className="border-b border-slate-400 pb-2 mb-4">
+                       RECIBO DE PRESTACAO DE SERVICO<br/>
+                       No: 001<br/>
+                       Data: 15/02/2025
+                    </div>
+                    <div>
+                       PRESTADOR: Joao da Silva ME<br/>
+                       CLIENTE: Empresa Alpha Ltda<br/>
+                       DOC: 00.000.000/0001-00<br/>
+                       ------------------------------<br/>
+                       DESC: Consultoria Especializada<br/>
+                       QTD: 1.00<br/>
+                       VALOR: R$ 1.500,00<br/>
+                       ------------------------------<br/>
+                       Assinatura: __________________
+                    </div>
+                 </div>
+                 {/* Badges de Erro/Amadorismo */}
+                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-12 pointer-events-none">
+                    <div className="bg-rose-500/10 border border-rose-500/30 text-rose-500 px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest backdrop-blur-sm">Design Amador</div>
+                 </div>
+               </div>
+
+               <p className="text-slate-500 text-sm leading-relaxed font-medium">
+                Dificuldade em cobrar valores mais altos, demora para gerar documentos e zero controle do faturamento acumulado.
+               </p>
+            </div>
+
+            {/* CARD PREMIUM */}
+            <div className="p-10 bg-violet-600/5 border border-violet-500/20 rounded-[4rem] space-y-12 relative overflow-hidden shadow-2xl shadow-violet-600/10 group">
+               <div className="flex items-center gap-4">
+                  <div className="w-1.5 h-6 bg-violet-500 rounded-full"></div>
+                  <h3 className="text-xl font-black uppercase tracking-tight text-white">O MEI NovaInvoice</h3>
+               </div>
+
+               <div className="relative group perspective-1000">
+                  {/* MINI MOCKUP CSS PREMIUM */}
+                  <div className="bg-white p-6 rounded-2xl shadow-2xl scale-95 group-hover:scale-100 group-hover:rotate-x-3 transition-all duration-700 relative overflow-hidden font-sans">
+                     <div className="flex justify-between items-start mb-6">
+                        <div className="w-12 h-12 bg-violet-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg shadow-violet-600/30 animate-pulse">N</div>
+                        <div className="text-right space-y-1">
+                           <div className="text-[8px] font-black text-violet-600 uppercase tracking-widest">Documento 001</div>
+                           <div className="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Emitido em 15 Fev</div>
+                        </div>
+                     </div>
+                     <div className="space-y-4">
+                        <div className="h-6 bg-violet-50 rounded-lg border-l-4 border-violet-500 flex items-center px-3">
+                            <span className="text-[8px] font-black text-violet-600 uppercase tracking-widest">Consultoria Estratégica</span>
+                        </div>
+                        <div className="flex justify-between items-end border-b border-slate-100 pb-2">
+                            <div className="space-y-1">
+                                <span className="text-[7px] font-black text-slate-300 uppercase block">Tomador de Serviço</span>
+                                <span className="text-[9px] font-bold text-slate-800 uppercase">Empresa Alpha Ltda</span>
+                            </div>
+                            <div className="text-right">
+                                <span className="text-[7px] font-black text-slate-300 uppercase block">Valor Final</span>
+                                <span className="text-xs font-black text-violet-600 tracking-tight">R$ 1.500,00</span>
+                            </div>
+                        </div>
+                        <div className="w-full h-1 bg-slate-50 rounded-full"></div>
+                        <div className="w-3/4 h-1 bg-slate-50 rounded-full"></div>
+                     </div>
+                     <div className="mt-8 pt-4 border-t border-slate-100 flex justify-between items-center">
+                        <div className="flex gap-2">
+                            <div className="w-8 h-8 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-center">
+                               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-slate-300"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                            </div>
+                            <div className="space-y-1 pt-1.5">
+                                <div className="w-12 h-1 bg-slate-200 rounded"></div>
+                                <div className="w-8 h-1 bg-slate-100 rounded"></div>
+                            </div>
+                        </div>
+                        <div className="px-3 py-2 bg-violet-600 rounded-xl shadow-lg shadow-violet-600/20 text-[7px] font-black text-white uppercase tracking-widest">Detalhes do Faturamento</div>
+                     </div>
+                     {/* Etiqueta PIX */}
+                     <div className="absolute top-4 right-4 bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-xl animate-bounce">Pago via PIX</div>
+                  </div>
+
+                  {/* Floating Tooltips */}
+                  <div className="absolute -top-4 -left-4 bg-[#0f172a] border border-white/10 px-4 py-2 rounded-2xl shadow-2xl z-20 animate-in slide-in-from-left-4">
+                     <span className="text-[9px] font-black text-violet-400 uppercase tracking-widest">Sua Logo</span>
+                  </div>
+                  <div className="absolute -bottom-4 -right-4 bg-[#0f172a] border border-white/10 px-4 py-2 rounded-2xl shadow-2xl z-20 animate-in slide-in-from-right-4">
+                     <span className="text-[9px] font-black text-emerald-400 uppercase tracking-widest">Status Automático</span>
+                  </div>
+               </div>
+
+               <p className="text-violet-400 text-sm font-bold uppercase tracking-widest leading-relaxed">
+                Documentos que justificam seu preço, encantam o cliente e autorizam seu faturamento.
+               </p>
+            </div>
+         </div>
+      </section>
+
+      <section id="pricing" className="w-full py-32 px-6 z-10 max-w-7xl flex flex-col items-center">
+         <div className="bg-[#0f172a]/60 backdrop-blur-3xl border border-white/10 rounded-[5rem] p-12 md:p-24 w-full text-center space-y-16 shadow-[0_100px_200px_-50px_rgba(0,0,0,1)] relative overflow-hidden">
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1/2 h-1 bg-gradient-to-r from-transparent via-violet-500 to-transparent"></div>
+            
+            <header className="space-y-6">
+               <h2 className="text-5xl md:text-7xl font-black tracking-tighter">Sua imagem de grife por <br/>menos de <span className="text-emerald-500">1 Real por dia</span>.</h2>
+               <p className="text-slate-500 font-bold uppercase tracking-[0.4em] text-[10px]">A oferta definitiva para o MEI profissional</p>
+            </header>
+
+            <div className="flex flex-col items-center gap-12">
+               <div className="space-y-4">
+                  <div className="flex items-baseline gap-2 justify-center">
+                     <span className="text-slate-500 text-2xl font-bold">R$</span>
+                     <span className="text-8xl font-black tracking-tighter text-white">{currentPrice.toFixed(2).split('.')[0]}</span>
+                     <span className="text-4xl font-black text-slate-500">,{currentPrice.toFixed(2).split('.')[1]}</span>
+                     <span className="text-slate-500 text-xl font-bold">/mês</span>
+                  </div>
+                  <p className="text-emerald-400 text-sm font-black uppercase tracking-[0.2em] bg-emerald-400/10 px-6 py-2 rounded-full border border-emerald-400/20">Apenas R$ {dailyPrice} por dia</p>
+               </div>
+
+               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl text-left">
+                  {[
+                     { title: "Ilimitado", desc: "Notas, Contratos e Recibos sem limites.", icon: "♾️" },
+                     { title: "Segurança", desc: "Backup em nuvem e criptografia SSL.", icon: "🛡️" },
+                     { title: "Mobile", desc: "Acesse e envie pelo WhatsApp de qualquer lugar.", icon: "📱" }
+                  ].map(item => (
+                     <div key={item.title} className="p-8 bg-white/5 border border-white/5 rounded-3xl space-y-4">
+                        <span className="text-2xl">{item.icon}</span>
+                        <h4 className="text-sm font-black uppercase text-white">{item.title}</h4>
+                        <p className="text-xs text-slate-500 font-medium leading-relaxed">{item.desc}</p>
+                     </div>
+                  ))}
+               </div>
+
+               <button 
+                  onClick={() => { scrollToId('auth-form'); setAuthMode('signup'); }} 
+                  className="px-16 py-8 bg-violet-600 hover:bg-violet-500 text-white rounded-[2.5rem] font-black uppercase text-sm tracking-[0.4em] shadow-2xl hover:scale-105 active:scale-95 transition-all animate-pulse-glow"
+               >
+                  Garantir Minha Vaga Fundador
+               </button>
+            </div>
+
+            <footer className="pt-12 border-t border-white/5 flex flex-col md:flex-row justify-center gap-12 text-[9px] font-black uppercase tracking-widest text-slate-600">
+               <div className="flex items-center gap-3"><span className="text-emerald-500">✓</span> 30 DIAS DE TESTE GRÁTIS</div>
+               <div className="flex items-center gap-3"><span className="text-emerald-500">✓</span> CANCELAMENTO INSTANTÂNEO</div>
+               <div className="flex items-center gap-3"><span className="text-emerald-500">✓</span> SUPORTE PRIORITÁRIO FUNDADOR</div>
+            </footer>
+         </div>
+      </section>
+
+      <footer className="w-full py-20 border-t border-white/5 z-10 text-center space-y-4">
+         <div className="text-2xl font-black text-slate-800 uppercase tracking-tighter">NovaInvoice</div>
+         <p className="text-[10px] text-slate-700 font-bold uppercase tracking-widest">Feito com precisão para Profissionais de Elite • © 2025</p>
+      </footer>
     </div>
   );
 
@@ -845,10 +983,9 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#020617] text-white font-['Inter'] relative">
       <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })} />
       
-      {/* WhatsApp Send Modal */}
       {isWhatsAppModalOpen && (
-        <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-2xl animate-in fade-in zoom-in duration-300">
-            <div className="bg-[#0f172a] w-full max-w-sm rounded-[3rem] border border-white/10 p-8 space-y-8 shadow-[0_50px_100px_-20px_rgba(0,0,0,1)]">
+        <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-2xl animate-in fade-in zoom-in duration-300">
+            <div className="bg-[#0f172a] w-full max-w-md rounded-[3rem] border border-white/10 p-8 space-y-8 shadow-[0_50px_100px_-20px_rgba(0,0,0,1)]">
                 <header className="space-y-2">
                     <h3 className="text-2xl font-black text-white tracking-tighter uppercase">Enviar Documento</h3>
                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Protocolo de Envio WhatsApp</p>
@@ -1007,7 +1144,7 @@ const App: React.FC = () => {
               <button disabled={isEmitting} onClick={handleGenerateContract} className="w-full py-6 bg-indigo-600 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl shadow-indigo-600/20 active:scale-95 transition-all">{isEmitting ? 'Gerando...' : 'Gerar Contrato PDF'}</button>
            </aside>
            <main className="flex-1 bg-[#020617] p-10 flex justify-center items-start overflow-y-auto overflow-x-hidden scrollbar-hide">
-              <div className="origin-top scale-[0.55] sm:scale-[0.75] lg:scale-[0.7] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700">
+              <div className="origin-top scale-[0.55] sm:scale-[0.75] lg:scale-[0.7] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700 mx-auto">
                 <ContractPreview 
                   content={parseContractTemplateText(CONTRACT_TEMPLATES.find(t => t.id === contractForm.templateId)?.content || '')}
                   provider={data.provider}
@@ -1113,43 +1250,67 @@ const App: React.FC = () => {
               </div>
             </div>
           ) : financialTab === 'expenses' ? (
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
-               <div className="lg:col-span-1">
-                 <form onSubmit={handleAddExpense} className="bg-white/5 border border-white/10 p-10 rounded-[3rem] space-y-8 shadow-2xl sticky top-8">
-                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Registrar Gasto</h3>
-                    <InputGroup label="O que adquiriu?" value={expenseForm.description} onChange={e => setExpenseForm({...expenseForm, description: e.target.value})} />
-                    <InputGroup label="Valor R$" type="number" value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} />
-                    <select value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white outline-none">
-                      {EXPENSE_CATEGORIES.map(c => <option key={c.name} value={c.name} className="bg-[#0f172a]">{c.name}</option>)}
-                    </select>
-                    <div className="space-y-3">
-                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Status do Pagamento</label>
-                      <div className="grid grid-cols-2 gap-3">
-                         <button type="button" onClick={() => setExpenseForm(prev => ({ ...prev, status: 'paid' }))} className={`py-4 rounded-[1.5rem] border font-black text-[10px] uppercase tracking-widest transition-all ${expenseForm.status === 'paid' ? 'bg-emerald-600 border-emerald-500 shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Pago</button>
-                         <button type="button" onClick={() => setExpenseForm(prev => ({ ...prev, status: 'pending' }))} className={`py-4 rounded-[1.5rem] border font-black text-[10px] uppercase tracking-widest transition-all ${expenseForm.status === 'pending' ? 'bg-rose-600 border-rose-500 shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Pendente</button>
-                      </div>
-                    </div>
-                    <InputGroup label="Data" type="date" value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} />
-                    <button type="submit" className="w-full py-5 bg-emerald-600 rounded-2xl text-white font-black uppercase text-[10px] tracking-widest">Adicionar Saída</button>
-                 </form>
-               </div>
-               <div className="lg:col-span-2 space-y-4">
-                 {filteredExpenses.map(e => (
-                   <div key={e.id} className="p-6 bg-white/5 border border-white/10 rounded-[2rem] flex items-center justify-between group">
-                      <div className="flex items-center gap-6">
-                        <span className="text-2xl">{EXPENSE_CATEGORIES.find(cat => cat.name === e.category)?.icon || "📎"}</span>
-                        <div>
-                          <div className="flex items-center gap-3">
-                            <h4 className="font-black text-white text-lg uppercase leading-none">{e.description}</h4>
-                            <button onClick={() => toggleExpenseStatus(e)} className={`px-2 py-0.5 rounded text-[8px] font-black uppercase border transition-all ${e.status === 'paid' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'}`}>{e.status === 'paid' ? 'Pago' : 'Pendente'}</button>
-                          </div>
-                          <p className="text-[9px] text-slate-500 uppercase mt-1">{formatDate(e.date)} • {e.category}</p>
+            <div className="space-y-12">
+              <div className="flex flex-col md:flex-row gap-4 mb-8">
+                <div className="flex-1 relative">
+                  <input 
+                    type="text" 
+                    value={expFilterSearch} 
+                    onChange={e => setExpFilterSearch(e.target.value)} 
+                    placeholder="Pesquisar despesa..." 
+                    className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-emerald-500/50" 
+                  />
+                  <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                </div>
+                <select value={expFilterCategory} onChange={e => setExpFilterCategory(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none cursor-pointer">
+                  <option value="all" className="bg-[#0f172a]">Todas Categorias</option>
+                  {EXPENSE_CATEGORIES.map(c => <option key={c.name} value={c.name} className="bg-[#0f172a]">{c.name}</option>)}
+                </select>
+                <input type="month" value={expFilterMonth} onChange={e => setExpFilterMonth(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none" />
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
+                 <div className="lg:col-span-1">
+                   <form onSubmit={handleAddExpense} className="bg-white/5 border border-white/10 p-10 rounded-[3rem] space-y-8 shadow-2xl sticky top-8">
+                      <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Registrar Gasto</h3>
+                      <InputGroup label="O que adquiriu?" value={expenseForm.description} onChange={e => setExpenseForm({...expenseForm, description: e.target.value})} />
+                      <InputGroup label="Valor R$" type="number" value={expenseForm.amount} onChange={e => setExpenseForm({...expenseForm, amount: e.target.value})} />
+                      <select value={expenseForm.category} onChange={e => setExpenseForm({...expenseForm, category: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white outline-none cursor-pointer">
+                        {EXPENSE_CATEGORIES.map(c => <option key={c.name} value={c.name} className="bg-[#0f172a]">{c.name}</option>)}
+                      </select>
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Status do Pagamento</label>
+                        <div className="grid grid-cols-2 gap-3">
+                           <button type="button" onClick={() => setExpenseForm(prev => ({ ...prev, status: 'paid' }))} className={`py-4 rounded-[1.5rem] border font-black text-[10px] uppercase tracking-widest transition-all ${expenseForm.status === 'paid' ? 'bg-emerald-600 border-emerald-500 shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Pago</button>
+                           <button type="button" onClick={() => setExpenseForm(prev => ({ ...prev, status: 'pending' }))} className={`py-4 rounded-[1.5rem] border font-black text-[10px] uppercase tracking-widest transition-all ${expenseForm.status === 'pending' ? 'bg-rose-600 border-rose-500 shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Pendente</button>
                         </div>
                       </div>
-                      <div className="flex items-center gap-6"><span className="text-2xl font-black text-rose-500">{formatCurrency(e.amount)}</span><button onClick={() => handleDeleteExpense(e.id)} className="p-2 text-slate-700 hover:text-rose-500 transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2-2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button></div>
-                   </div>
-                 ))}
-               </div>
+                      <InputGroup label="Data" type="date" value={expenseForm.date} onChange={e => setExpenseForm({...expenseForm, date: e.target.value})} />
+                      <button type="submit" className="w-full py-5 bg-emerald-600 rounded-2xl text-white font-black uppercase text-[10px] tracking-widest hover:bg-emerald-500 transition-all shadow-xl shadow-emerald-600/10">Adicionar Saída</button>
+                   </form>
+                 </div>
+                 <div className="lg:col-span-2 space-y-4">
+                   {filteredExpenses.length === 0 ? (
+                     <div className="text-center py-20 bg-white/5 rounded-[3rem] border border-white/5">
+                        <p className="text-slate-600 font-bold uppercase tracking-widest text-[10px]">Nenhuma despesa encontrada.</p>
+                     </div>
+                   ) : filteredExpenses.map(e => (
+                     <div key={e.id} className="p-6 bg-white/5 border border-white/10 rounded-[2rem] flex items-center justify-between group hover:border-emerald-500/20 transition-all">
+                        <div className="flex items-center gap-6">
+                          <span className="text-2xl">{EXPENSE_CATEGORIES.find(cat => cat.name === e.category)?.icon || "📎"}</span>
+                          <div>
+                            <div className="flex items-center gap-3">
+                              <h4 className="font-black text-white text-lg uppercase leading-none">{e.description}</h4>
+                              <button onClick={() => toggleExpenseStatus(e)} className={`px-2 py-0.5 rounded text-[8px] font-black uppercase border transition-all ${e.status === 'paid' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'}`}>{e.status === 'paid' ? 'Pago' : 'Pendente'}</button>
+                            </div>
+                            <p className="text-[9px] text-slate-500 uppercase mt-1">{formatDate(e.date)} • {e.category}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-6"><span className="text-2xl font-black text-rose-500">{formatCurrency(e.amount)}</span><button onClick={() => handleDeleteExpense(e.id)} className="p-2 text-slate-700 hover:text-rose-500 transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2-2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg></button></div>
+                     </div>
+                   ))}
+                 </div>
+              </div>
             </div>
           ) : (
             <div className="space-y-12 animate-in slide-in-from-bottom-4">
@@ -1176,7 +1337,7 @@ const App: React.FC = () => {
                 </section>
                 <section className="bg-white/5 border border-white/10 p-12 rounded-[4rem] space-y-12">
                     <header className="flex flex-col md:flex-row justify-between items-start gap-6">
-                        <div className="space-y-1"><h3 className="text-3xl font-black uppercase text-white">Assistente DASN-SIMEI</h3><p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest">Fechamento Anual</p></div>
+                        <div className="space-y-1"><h3 className="text-3xl font-black uppercase text-white leading-none">Assistente DASN-SIMEI</h3><p className="text-[11px] text-slate-500 font-bold uppercase tracking-widest">Fechamento Anual</p></div>
                         <div className="flex bg-white/5 p-1 rounded-2xl border border-white/10">{[new Date().getFullYear()-1, new Date().getFullYear()].map(y => <button key={y} onClick={() => setAnalyticsYear(y)} className={`px-6 py-2 rounded-xl text-[10px] font-black transition-all ${analyticsYear === y ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-600'}`}>Ano {y}</button>)}</div>
                     </header>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
@@ -1250,7 +1411,7 @@ const App: React.FC = () => {
                        <div className="flex-1 w-full space-y-4">
                          <button onClick={() => fileInputRef.current?.click()} className="text-[9px] font-black w-full py-4 bg-white/5 border border-white/10 rounded-2xl uppercase tracking-widest hover:bg-white/10 transition-all">Alterar Imagem</button>
                          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} />
-                         <InputGroup label="Logo Letra" value={data.branding.logoLetter} onChange={(e) => setData(prev => ({ ...prev, branding: { ...prev.branding, logoLetter: e.target.value.substring(0,1).toUpperCase() } }))} />
+                         <InputGroup label="Logo Letra" value={data.branding.logoLetter} onChange={(e) => setData(prev => ({ ...prev, branding: { ...prev.branding, logo_letter: e.target.value.substring(0,1).toUpperCase() } }))} />
                        </div>
                      </div>
                      <div className="grid grid-cols-2 gap-5">
@@ -1356,7 +1517,6 @@ const App: React.FC = () => {
                    </div>
                 </section>
 
-                {/* Botão Subir ao Topo no final do fluxo do formulário */}
                 <button 
                     onClick={scrollToTop}
                     className="w-full py-6 mt-4 text-slate-500 font-black uppercase text-[11px] tracking-[0.3em] hover:text-white transition-all flex items-center justify-center gap-3 bg-white/5 rounded-[2.5rem] border border-white/5 hover:border-white/20 shadow-xl"
