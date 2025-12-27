@@ -2,6 +2,8 @@
 export type InvoiceCategory = 'service' | 'product';
 export type PaymentStatus = 'pending' | 'paid';
 export type SignatureType = 'physical' | 'digital';
+export type ContractStatus = 'active' | 'finished' | 'canceled';
+export type ContractPeriodicity = 'one-time' | 'monthly' | 'periodic';
 
 export interface Entity {
   name: string;
@@ -80,6 +82,7 @@ export interface InvoiceData {
   pdfUrl?: string;
   whatsappMessage?: string;
   status?: PaymentStatus;
+  contractRef?: string;
 }
 
 export interface InvoiceHistoryItem {
@@ -91,6 +94,20 @@ export interface InvoiceHistoryItem {
   clientName: string;
   pdfUrl?: string;
   status: PaymentStatus;
+}
+
+export interface ContractHistoryItem {
+  id: string;
+  clientName: string;
+  value: number;
+  templateId: string;
+  signatureType: SignatureType;
+  pdfUrl: string;
+  createdAt: string;
+  status: ContractStatus;
+  periodicity: ContractPeriodicity;
+  contractHash: string;
+  fullData: any;
 }
 
 export interface Expense {

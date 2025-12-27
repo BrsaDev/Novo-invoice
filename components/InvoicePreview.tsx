@@ -87,9 +87,13 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
           <div className="text-center py-1.5 border-b border-black font-bold text-[10px] uppercase tracking-widest" style={{ backgroundColor: sec.bgColor, color: sec.textColor }}>{sec.title}</div>
           <Row><Cell label="Nome / Razão Social:" value={sec.entity.name} className="w-full" /></Row>
           <Row>
-            <Cell label="CPF / CNPJ:" value={sec.entity.taxId} className="w-1/3" />
-            <Cell label="E-mail:" value={sec.entity.email} className="w-1/3" />
-            <Cell label="Telefone:" value={sec.entity.phone} className="w-1/3" />
+            <Cell label="CPF / CNPJ:" value={sec.entity.taxId} className="w-2/4" />
+            <Cell label="I. Municipal:" value={sec.entity.im} className="w-1/4" />
+            <Cell label="I. Estadual:" value={sec.entity.ie} className="w-1/4" />
+          </Row>
+          <Row>
+            <Cell label="E-mail:" value={sec.entity.email} className="w-1/2" />
+            <Cell label="Telefone:" value={sec.entity.phone} className="w-1/2" />
           </Row>
           <Row><Cell label="Endereço:" value={formatFullAddress(sec.entity)} className="w-full" /></Row>
         </React.Fragment>
@@ -162,6 +166,12 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
           <div key={i}>
             <h4 className="text-[10px] font-black text-slate-300 uppercase tracking-widest mb-4 border-b pb-2">{item.label}</h4>
             <p className="text-sm font-bold text-slate-800 uppercase tracking-tight">{item.entity.name}</p>
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <p className="text-[8px] text-slate-400 uppercase font-black tracking-widest">Documento: <span className="text-slate-600">{item.entity.taxId}</span></p>
+              {(item.entity.im || item.entity.ie) && (
+                <p className="text-[8px] text-slate-400 uppercase font-black tracking-widest">IM/IE: <span className="text-slate-600">{item.entity.im || '-'}/{item.entity.ie || '-'}</span></p>
+              )}
+            </div>
             <p className="text-[10px] text-slate-500 mt-3 leading-relaxed">{formatFullAddress(item.entity)}</p>
           </div>
         ))}
@@ -224,6 +234,10 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
             <div key={i} className="space-y-2">
               <p className="text-[10px] font-black text-slate-300 uppercase tracking-widest">{item.label}</p>
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-tight">{item.entity.name}</h3>
+              <p className="text-[8px] text-slate-400 font-black uppercase tracking-widest">Doc: {item.entity.taxId}</p>
+              {(item.entity.im || item.entity.ie) && (
+                <p className="text-[8px] text-slate-400 font-black uppercase tracking-widest">IM/IE: {item.entity.im || '-'}/{item.entity.ie || '-'}</p>
+              )}
             </div>
           ))}
        </div>

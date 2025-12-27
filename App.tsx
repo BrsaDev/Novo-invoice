@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment, PaymentStatus, SignatureType } from './types';
+import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment, PaymentStatus, SignatureType, ContractHistoryItem, ContractStatus, ContractPeriodicity } from './types';
 import { InputGroup } from './components/InputGroup';
 import { InvoicePreview } from './components/InvoicePreview';
 import { ContractPreview } from './components/ContractPreview';
@@ -53,6 +53,8 @@ const EMPTY_ENTITY: Entity = {
   name: '',
   tradingName: '',
   taxId: '',
+  im: '',
+  ie: '',
   street: '',
   number: '',
   complement: '',
@@ -148,20 +150,28 @@ const EntityForm: React.FC<EntityFormProps> = ({ title, entity, updateFn, isClie
     </div>
     <div className="space-y-4">
       <InputGroup label="Nome / Razão Social" value={entity.name} onChange={(e) => updateFn('name', e.target.value)} />
-      <div className="grid grid-cols-2 gap-4">
-        <InputGroup label="CPF / CNPJ" value={entity.taxId} onChange={(e) => updateFn('taxId', e.target.value)} />
-        <InputGroup label="Telefone" value={entity.phone} onChange={(e) => updateFn('phone', e.target.value)} />
+      <div className="grid grid-cols-12 gap-4">
+        <div className="col-span-12 sm:col-span-6"><InputGroup label="CPF / CNPJ" value={entity.taxId} onChange={(e) => updateFn('taxId', e.target.value)} /></div>
+        <div className="col-span-6 sm:col-span-3"><InputGroup label="I. Municipal" value={entity.im || ''} onChange={(e) => updateFn('im', e.target.value)} /></div>
+        <div className="col-span-6 sm:col-span-3"><InputGroup label="I. Estadual" value={entity.ie || ''} onChange={(e) => updateFn('ie', e.target.value)} /></div>
       </div>
-      <InputGroup label="E-mail" value={entity.email} onChange={(e) => updateFn('email', e.target.value)} />
+      <div className="grid grid-cols-2 gap-4">
+        <InputGroup label="Telefone" value={entity.phone} onChange={(e) => updateFn('phone', e.target.value)} />
+        <InputGroup label="E-mail" value={entity.email} onChange={(e) => updateFn('email', e.target.value)} />
+      </div>
       {isClient && <InputGroup label="WhatsApp" value={entity.whatsapp || ''} onChange={(e) => updateFn('whatsapp', e.target.value)} />}
       <div className="pt-6 border-t border-white/5 space-y-4">
         <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-4"><InputGroup label="CEP" value={entity.zipCode || ''} onChange={(e) => updateFn('zipCode', e.target.value)} /></div>
           <div className="col-span-8"><InputGroup label="Logradouro" value={entity.street} onChange={(e) => updateFn('street', e.target.value)} /></div>
-          <div className="col-span-4"><InputGroup label="Nº" value={entity.number} onChange={(e) => updateFn('number', e.target.value)} /></div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <InputGroup label="Cidade" value={entity.city} onChange={(e) => updateFn('city', e.target.value)} />
-          <InputGroup label="UF" value={entity.uf} onChange={(e) => updateFn('uf', e.target.value)} />
+        <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-3"><InputGroup label="Nº" value={entity.number} onChange={(e) => updateFn('number', e.target.value)} /></div>
+          <div className="col-span-9"><InputGroup label="Bairro" value={entity.neighborhood || ''} onChange={(e) => updateFn('neighborhood', e.target.value)} /></div>
+        </div>
+        <div className="grid grid-cols-12 gap-4">
+          <div className="col-span-8"><InputGroup label="Cidade" value={entity.city} onChange={(e) => updateFn('city', e.target.value)} /></div>
+          <div className="col-span-4"><InputGroup label="UF" value={entity.uf} onChange={(e) => updateFn('uf', e.target.value)} /></div>
         </div>
       </div>
     </div>
@@ -178,6 +188,7 @@ const App: React.FC = () => {
   const [currentInvoiceId, setCurrentInvoiceId] = useState<string | null>(null);
   const [savedClients, setSavedClients] = useState<Entity[]>([]);
   const [history, setHistory] = useState<InvoiceHistoryItem[]>([]);
+  const [contractHistory, setContractHistory] = useState<ContractHistoryItem[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [dasPayments, setDasPayments] = useState<DasPayment[]>([]);
   const [userCount, setUserCount] = useState(0);
@@ -186,13 +197,18 @@ const App: React.FC = () => {
   const [whatsAppRecipientPhone, setWhatsAppRecipientPhone] = useState('');
   const [linkCopied, setLinkCopied] = useState(false);
 
+  const [contractsViewTab, setContractsViewTab] = useState<'new' | 'history'>('new');
+  const [contractFilterSearch, setContractFilterSearch] = useState('');
+
   const [contractForm, setContractForm] = useState({ 
     templateId: CONTRACT_TEMPLATES[0].id, 
     serviceDesc: '', 
     value: '', 
     paymentMethod: 'Transferência Bancária',
     deadline: '30',
-    signatureType: 'physical' as SignatureType
+    signatureType: 'physical' as SignatureType,
+    status: 'active' as ContractStatus,
+    periodicity: 'one-time' as ContractPeriodicity
   });
   const [isContractClientModalOpen, setIsContractClientModalOpen] = useState(false);
   const [contractClient, setContractClient] = useState<Entity | null>(null);
@@ -237,6 +253,11 @@ const App: React.FC = () => {
   const whatsappTextAreaRef = useRef<HTMLTextAreaElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
 
+  const currentContractHash = useMemo(() => {
+    if (!session?.user?.id) return '';
+    return session.user.id.split('-')[0].toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+  }, [contractForm.templateId, contractClient?.taxId]);
+
   const WHATSAPP_TAGS = [
     { label: 'Cliente', tag: '{{cliente}}' },
     { label: 'Empresa', tag: '{{empresa}}' },
@@ -263,6 +284,7 @@ const App: React.FC = () => {
       loadProfile();
       loadClients();
       loadHistory();
+      loadContractHistory();
       loadExpenses();
       loadDasPayments();
     }
@@ -285,11 +307,19 @@ const App: React.FC = () => {
     if (profile) {
       setData(prev => ({
         ...prev,
-        provider: { ...prev.provider, ...profile, taxId: profile.tax_id, zipCode: profile.zip_code },
+        provider: { 
+          ...prev.provider, 
+          ...profile, 
+          taxId: profile.tax_id, 
+          zipCode: profile.zip_code,
+          im: profile.im,
+          ie: profile.ie,
+          neighborhood: profile.neighborhood
+        },
         branding: {
           primaryColor: profile.primary_color || INITIAL_BRANDING.primaryColor,
           secondaryColor: profile.secondary_color || INITIAL_BRANDING.secondaryColor,
-          logo_letter: profile.logo_letter || INITIAL_BRANDING.logoLetter,
+          logoLetter: profile.logo_letter || INITIAL_BRANDING.logoLetter,
           logoImage: profile.logo_base64 || INITIAL_BRANDING.logoImage,
           template: (profile.template as any) || INITIAL_BRANDING.template,
         }
@@ -299,7 +329,14 @@ const App: React.FC = () => {
 
   const loadClients = async () => {
     const { data: clients } = await supabase.from('clients').select('*').order('name');
-    if (clients) setSavedClients(clients.map(c => ({ ...c, taxId: c.tax_id, zipCode: c.zip_code })));
+    if (clients) setSavedClients(clients.map(c => ({ 
+      ...c, 
+      taxId: c.tax_id, 
+      zipCode: c.zip_code,
+      im: c.im,
+      ie: c.ie,
+      neighborhood: c.neighborhood
+    })));
   };
 
   const loadHistory = async () => {
@@ -313,6 +350,23 @@ const App: React.FC = () => {
       clientName: inv.client_name, 
       pdfUrl: inv.pdf_url,
       status: (inv.full_data.status || 'pending') as PaymentStatus
+    })));
+  };
+
+  const loadContractHistory = async () => {
+    const { data: contracts } = await supabase.from('contracts').select('*').order('created_at', { ascending: false });
+    if (contracts) setContractHistory(contracts.map(c => ({
+      id: c.id,
+      clientName: c.client_name,
+      value: Number(c.value),
+      templateId: c.template_id,
+      signatureType: c.signature_type as SignatureType,
+      pdfUrl: c.pdf_url,
+      createdAt: c.created_at,
+      status: (c.status || 'active') as ContractStatus,
+      periodicity: (c.periodicity || 'one-time') as ContractPeriodicity,
+      contractHash: c.contract_hash || 'S/N',
+      fullData: c.full_data
     })));
   };
 
@@ -346,6 +400,12 @@ const App: React.FC = () => {
       return matchSearch && matchCategory && matchStatus && matchMonth;
     });
   }, [history, filterSearch, filterCategory, filterStatus, filterMonth]);
+
+  const filteredContractHistory = useMemo(() => {
+    return contractHistory.filter(item => 
+      item.clientName.toLowerCase().includes(contractFilterSearch.toLowerCase())
+    );
+  }, [contractHistory, contractFilterSearch]);
 
   const filteredExpenses = useMemo(() => {
     return expenses.filter(e => {
@@ -441,6 +501,43 @@ const App: React.FC = () => {
       setIsWhatsAppModalOpen(true);
   };
 
+  const handleOpenWhatsAppModalFromContract = (item: ContractHistoryItem) => {
+      setData(prev => ({
+        ...prev,
+        client: savedClients.find(c => c.name === item.clientName) || INITIAL_DATA.client,
+        pdfUrl: item.pdfUrl,
+        invoiceNumber: item.id.split('-')[0].toUpperCase(),
+        whatsappMessage: `Olá! Segue o link do nosso contrato: ${item.pdfUrl}`
+      }));
+      setWhatsAppRecipientPhone(item.fullData.client?.whatsapp || '');
+      setIsWhatsAppModalOpen(true);
+  };
+
+  const handleCreateInvoiceFromContract = (contract: ContractHistoryItem) => {
+    const contractVal = contract.value;
+    const clientData = savedClients.find(c => c.name === contract.clientName) || contract.fullData.client || EMPTY_ENTITY;
+    const refText = `\n\nDocumento faturado conforme contrato Ref: ${contract.contractHash}.`;
+    const newData: InvoiceData = {
+      ...INITIAL_DATA,
+      provider: data.provider,
+      branding: data.branding,
+      client: clientData,
+      items: [{
+        id: '1',
+        description: contract.fullData.serviceDesc || 'Serviços sob contrato',
+        quantity: 1,
+        unitValue: contractVal,
+        unit: 'UN'
+      }],
+      notes: (INITIAL_DATA.notes + refText).trim(),
+      contractRef: contract.contractHash
+    };
+    setData(newData);
+    setCurrentInvoiceId(null);
+    setView('editor');
+    showToast('Editor preenchido com dados do contrato!', 'success');
+  };
+
   const handleGenerateContract = async () => {
     if (!contractClient || !contractRef.current) return showToast('Selecione um cliente e preencha os dados.', 'error');
     setIsEmitting(true);
@@ -455,9 +552,37 @@ const App: React.FC = () => {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      const fileName = `contrato_${contractClient.taxId}_${Date.now()}.pdf`;
+      const pdfBlob = pdf.output('blob');
+      const { data: up } = await supabase.storage.from('invoices').upload(`${session.user.id}/contracts/${fileName}`, pdfBlob);
+      let publicUrl = null;
+      if (up) publicUrl = supabase.storage.from('invoices').getPublicUrl(`${session.user.id}/contracts/${fileName}`).data.publicUrl;
+      const finalUrl = publicUrl ? await shortenUrl(publicUrl) : null;
+      const payload = {
+        user_id: session.user.id,
+        client_name: contractClient.name,
+        value: parseFloat(contractForm.value) || 0,
+        template_id: contractForm.templateId,
+        signature_type: contractForm.signatureType,
+        status: contractForm.status,
+        periodicity: contractForm.periodicity,
+        contract_hash: currentContractHash,
+        pdf_url: finalUrl,
+        full_data: { ...contractForm, client: contractClient }
+      };
+      await supabase.from('contracts').insert(payload);
       pdf.save(`Contrato_${contractClient.name}.pdf`);
-      showToast('Contrato gerado com sucesso.', 'success');
-    } catch { showToast('Erro ao gerar contrato.', 'error'); } finally { setIsEmitting(false); }
+      showToast('Contrato emitido e armazenado.', 'success');
+      setData(prev => ({ ...prev, pdfUrl: finalUrl || '', client: contractClient }));
+      setWhatsAppRecipientPhone(contractClient.whatsapp || contractClient.phone || '');
+      setIsWhatsAppModalOpen(true);
+      loadContractHistory();
+    } catch (err: any) { 
+      console.error(err);
+      showToast('Erro ao gerar contrato.', 'error'); 
+    } finally { 
+      setIsEmitting(false); 
+    }
   };
 
   const handleSaveProfile = async () => {
@@ -467,7 +592,12 @@ const App: React.FC = () => {
       user_id: session.user.id,
       name: data.provider.name,
       tax_id: data.provider.taxId,
-      street: data.provider.number,
+      im: data.provider.im,
+      ie: data.provider.ie,
+      zip_code: data.provider.zipCode,
+      neighborhood: data.provider.neighborhood,
+      street: data.provider.street,
+      number: data.provider.number,
       city: data.provider.city,
       uf: data.provider.uf,
       email: data.provider.email,
@@ -475,9 +605,8 @@ const App: React.FC = () => {
       pix_key: data.provider.pixKey,
       primary_color: data.branding.primaryColor,
       secondary_color: data.branding.secondaryColor,
-      logo_letter: data.branding.logo_letter,
-      template: data.branding.template,
-      updated_at: new Date().toISOString()
+      logo_letter: data.branding.logoLetter,
+      template: data.branding.template
     }, { onConflict: 'user_id' });
     setIsSavingProfile(false);
     if (!error) showToast('Perfil atualizado com sucesso.', 'success');
@@ -490,23 +619,49 @@ const App: React.FC = () => {
       user_id: session.user.id,
       name: data.client.name,
       tax_id: data.client.taxId,
+      im: data.client.im,
+      ie: data.client.ie,
+      zip_code: data.client.zipCode,
+      neighborhood: data.client.neighborhood,
       street: data.client.street,
       number: data.client.number,
       city: data.client.city,
       uf: data.client.uf,
       email: data.client.email,
       phone: data.client.phone,
-      whatsapp: data.client.whatsapp,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id, tax_id' });
+      whatsapp: data.client.whatsapp
+    }, { onConflict: 'user_id,tax_id' });
     setIsSavingClient(false);
     if (!error) { showToast('Cliente salvo.', 'success'); loadClients(); }
+    else { console.error(error); showToast('Erro ao salvar cliente.', 'error'); }
+  };
+
+  const handleDuplicateInvoice = (item: InvoiceHistoryItem) => {
+    // Increment logic for invoice number
+    const currentNumStr = item.data.invoiceNumber;
+    const currentNum = parseInt(currentNumStr);
+    const nextNum = isNaN(currentNum) 
+      ? currentNumStr + "_COPY" 
+      : (currentNum + 1).toString().padStart(currentNumStr.length, '0');
+    
+    const duplicatedData: InvoiceData = {
+      ...item.data,
+      invoiceNumber: nextNum,
+      issueDate: new Date().toISOString().split('T')[0], // Reset to today
+      pdfUrl: undefined, // Reset PDF link for new emission
+      status: 'pending' // Reset status for new emission
+    };
+    
+    setData(duplicatedData);
+    setCurrentInvoiceId(null); // Ensure it creates a new record
+    setView('editor');
+    showToast(`Cópia da nota #${currentNumStr} criada com número #${nextNum}`, 'success');
   };
 
   const toggleDasPayment = async (year: number, month: number) => {
     const existing = dasPayments.find(d => d.year === year && d.month === month);
     const newVal = !existing?.isPaid;
-    const { error } = await supabase.from('das_payments').upsert({ user_id: session.user.id, year, month, is_paid: newVal, updated_at: new Date().toISOString() }, { onConflict: 'user_id, year, month' });
+    const { error } = await supabase.from('das_payments').upsert({ user_id: session.user.id, year, month, is_paid: newVal }, { onConflict: 'user_id,year,month' });
     if (!error) { showToast(`${month}/${year} marcado como ${newVal ? 'Pago' : 'Pendente'}`, 'info'); loadDasPayments(); }
   };
 
@@ -542,13 +697,11 @@ const App: React.FC = () => {
     });
     const filteredExp = expenses.filter(e => e.date.startsWith(exportMonth));
     if (filteredHist.length === 0 && filteredExp.length === 0) return showToast('Sem dados para exportar neste mês.', 'error');
-
     let content = `RELATÓRIO MENSAL - ${month}/${year}\nGERADO POR: ${data.provider.name}\n--------------------------------------------------\n\nDOCS EMITIDOS:\n`;
     filteredHist.forEach(h => content += `${new Date(h.timestamp).toLocaleDateString('pt-BR')} | ${h.data.invoiceNumber} | ${h.clientName} | ${formatCurrency(h.totalValue)} | ${h.status.toUpperCase()}\n`);
     content += `TOTAL EMISSÕES: ${formatCurrency(filteredHist.reduce((a,b) => a+b.totalValue, 0))}\n\nDESPESAS REGISTRADAS:\n`;
     filteredExp.forEach(e => content += `${formatDate(e.date)} | ${e.description} | ${e.category} | ${formatCurrency(e.amount)} | ${e.status.toUpperCase()}\n`);
     content += `TOTAL DESPESAS: ${formatCurrency(filteredExp.reduce((a,b) => a+b.amount, 0))}\n`;
-
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -572,14 +725,12 @@ const App: React.FC = () => {
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save(`Doc_${data.invoiceNumber}.pdf`);
-      
       const pdfBlob = pdf.output('blob');
       const fileName = `fatura_${data.invoiceNumber}_${Date.now()}.pdf`;
       const { data: up } = await supabase.storage.from('invoices').upload(`${session.user.id}/${fileName}`, pdfBlob);
       let publicUrl = null;
       if (up) publicUrl = supabase.storage.from('invoices').getPublicUrl(`${session.user.id}/${fileName}`).data.publicUrl;
       const finalUrl = publicUrl ? await shortenUrl(publicUrl) : null;
-
       const payload = {
         user_id: session.user.id,
         client_name: data.client.name,
@@ -589,10 +740,8 @@ const App: React.FC = () => {
         full_data: { ...data, pdfUrl: finalUrl, status: data.status || 'pending' },
         pdf_url: finalUrl
       };
-      
       if (currentInvoiceId) await supabase.from('invoices').update(payload).eq('id', currentInvoiceId);
       else await supabase.from('invoices').insert(payload);
-      
       setData(prev => ({ ...prev, pdfUrl: finalUrl || undefined }));
       showToast('Documento emitido e salvo.', 'success');
       loadHistory();
@@ -657,7 +806,11 @@ const App: React.FC = () => {
         if (error) throw error;
         showToast('Acesso autorizado.', 'success');
       }
-    } catch (err: any) { showToast(err.message || 'Erro de autenticação.', 'error'); } finally { setIsLoggingIn(false); }
+    } catch (err: any) { 
+      showToast(err.message || 'Erro de autenticação.', 'error'); 
+    } finally { 
+      setIsLoggingIn(false); 
+    }
   };
 
   const handleLogout = async () => { await supabase.auth.signOut(); setView('landing'); };
@@ -725,10 +878,8 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#020617] text-white flex flex-col items-center relative overflow-x-hidden scroll-smooth">
       <div className="fixed top-[-10%] left-[-10%] w-[60%] h-[60%] bg-blue-600/10 blur-[150px] rounded-full bg-orb pointer-events-none"></div>
       <div className="fixed bottom-[-10%] right-[-10%] w-[60%] h-[60%] bg-indigo-600/10 blur-[150px] rounded-full bg-orb pointer-events-none" style={{ animationDelay: '2s' }}></div>
-
       <section className="min-h-screen w-full flex flex-col items-center justify-center px-6 py-20 relative z-10 max-w-7xl">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-24 items-center">
-          
           <div className="space-y-12 animate-in slide-in-from-left-10 duration-1000">
             <header className="space-y-8">
               <div className="w-20 h-20 bg-blue-600 rounded-[2rem] flex items-center justify-center text-4xl font-black shadow-xl shadow-blue-600/30">N</div>
@@ -742,7 +893,6 @@ const App: React.FC = () => {
                 </p>
               </div>
             </header>
-
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-8 gap-y-10 border-t border-white/5 pt-12">
               {[
                 { label: "Layout de Grife", desc: "Notas e contratos autoritários.", icon: "✨", color: "text-blue-500" },
@@ -761,7 +911,6 @@ const App: React.FC = () => {
                 </div>
               ))}
             </div>
-            
             <button onClick={() => scrollToId('auth-form')} className="inline-flex items-center gap-4 group">
                <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center border border-white/10 group-hover:bg-blue-600 group-hover:border-blue-500 transition-all">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="group-hover:translate-y-1 transition-transform"><path d="M7 13l5 5 5-5M7 6l5 5 5-5"/></svg>
@@ -769,37 +918,28 @@ const App: React.FC = () => {
                <span className="text-xs font-black uppercase tracking-[0.3em] text-slate-500 group-hover:text-white transition-colors">Conheça os detalhes abaixo</span>
             </button>
           </div>
-
           <div className="flex justify-center animate-in slide-in-from-right-10 duration-1000">
             <div id="auth-form" className="w-full max-w-md bg-[#0f172a]/40 backdrop-blur-3xl p-8 md:p-12 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
               <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-6 py-3 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-500/20 z-20 whitespace-nowrap">
                 {remainingSpots > 0 ? `Restam ${remainingSpots} Vagas Fundador` : 'Assinatura Padrão Ativa'}
               </div>
-
               <div className="space-y-10">
                 <header className="text-center space-y-2">
                   <h2 className="text-3xl font-black tracking-tight">{authMode === 'login' ? 'Bem-vindo' : 'Crie sua conta'}</h2>
                   <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Entre no ecossistema NovaInvoice</p>
                 </header>
-
                 <form onSubmit={handleAuth} className="space-y-6">
                   {authMode === 'signup' && (
                     <InputGroup label="Como quer ser chamado?" value={userName} onChange={e => setUserName(e.target.value)} placeholder="Seu Nome Completo" />
                   )}
                   <InputGroup label="E-mail" value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="email@exemplo.com" />
                   <InputGroup label="Senha" type="password" value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" />
-                  
                   <div className="pt-4">
-                    <button 
-                      disabled={isLoggingIn} 
-                      type="submit" 
-                      className="w-full py-5 rounded-2xl text-white font-black uppercase text-[11px] tracking-[0.3em] shadow-2xl active:scale-95 transition-all bg-blue-600 hover:bg-blue-500 shadow-blue-600/20"
-                    >
+                    <button disabled={isLoggingIn} type="submit" className="w-full py-5 rounded-2xl text-white font-black uppercase text-[11px] tracking-[0.3em] shadow-2xl active:scale-95 transition-all bg-blue-600 hover:bg-blue-500 shadow-blue-600/20">
                       {isLoggingIn ? 'Processando...' : (authMode === 'login' ? 'Entrar no Sistema' : 'Ativar Minha Conta')}
                     </button>
                   </div>
                 </form>
-
                 <div className="text-center space-y-6">
                   <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-[10px] text-slate-400 hover:text-white font-black uppercase tracking-widest transition-all">
                     {authMode === 'login' ? 'Não tem conta? Cadastre-se' : 'Já tem conta? Faça login'}
@@ -810,23 +950,18 @@ const App: React.FC = () => {
           </div>
         </div>
       </section>
-
       <section className="w-full py-32 px-6 z-10 max-w-7xl">
          <div className="text-center space-y-6 mb-24">
             <h2 className="text-4xl md:text-6xl font-black tracking-tighter">Sua imagem vale quanto você cobra.</h2>
             <p className="text-slate-500 font-bold uppercase tracking-[0.3em] text-[10px]">Compare a diferença visual de um MEI NovaInvoice</p>
          </div>
-         
          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-            {/* CARD GENERICO */}
             <div className="p-10 bg-white/[0.02] border border-white/5 rounded-[4rem] space-y-12 relative overflow-hidden group">
                <div className="flex items-center gap-4">
                   <div className="w-1.5 h-6 bg-rose-500 rounded-full"></div>
                   <h3 className="text-xl font-black uppercase tracking-tight text-white/40">O MEI Genérico</h3>
                </div>
-               
                <div className="relative">
-                 {/* MOCKUP .TXT DINAMICO */}
                  <div className="bg-[#e2e8f0] p-8 rounded-xl border-4 border-slate-300 opacity-50 grayscale group-hover:grayscale-0 transition-all duration-700 shadow-inner font-mono text-[10px] text-slate-800 leading-relaxed min-h-[220px]">
                     <div className="border-b border-slate-400 pb-2 mb-4">
                        RECIBO DE PRESTACAO DE SERVICO<br/>
@@ -845,26 +980,20 @@ const App: React.FC = () => {
                        Assinatura: __________________
                     </div>
                  </div>
-                 {/* Badges de Erro/Amadorismo */}
                  <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rotate-12 pointer-events-none">
                     <div className="bg-rose-500/10 border border-rose-500/30 text-rose-500 px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest backdrop-blur-sm">Design Amador</div>
                  </div>
                </div>
-
                <p className="text-slate-500 text-sm leading-relaxed font-medium">
                 Dificuldade em cobrar valores mais altos, demora para gerar documentos e zero controle do faturamento acumulado.
                </p>
             </div>
-
-            {/* CARD PREMIUM */}
             <div className="p-10 bg-violet-600/5 border border-violet-500/20 rounded-[4rem] space-y-12 relative overflow-hidden shadow-2xl shadow-violet-600/10 group">
                <div className="flex items-center gap-4">
-                  <div className="w-1.5 h-6 bg-violet-500 rounded-full"></div>
+                  <div className="w-1.5 h-6 bg-violet-50 rounded-full"></div>
                   <h3 className="text-xl font-black uppercase tracking-tight text-white">O MEI NovaInvoice</h3>
                </div>
-
                <div className="relative group perspective-1000">
-                  {/* MINI MOCKUP CSS PREMIUM */}
                   <div className="bg-white p-6 rounded-2xl shadow-2xl scale-95 group-hover:scale-100 group-hover:rotate-x-3 transition-all duration-700 relative overflow-hidden font-sans">
                      <div className="flex justify-between items-start mb-6">
                         <div className="w-12 h-12 bg-violet-600 rounded-xl flex items-center justify-center text-white font-black text-xl shadow-lg shadow-violet-600/30 animate-pulse">N</div>
@@ -902,11 +1031,8 @@ const App: React.FC = () => {
                         </div>
                         <div className="px-3 py-2 bg-violet-600 rounded-xl shadow-lg shadow-violet-600/20 text-[7px] font-black text-white uppercase tracking-widest">Detalhes do Faturamento</div>
                      </div>
-                     {/* Etiqueta PIX */}
                      <div className="absolute top-4 right-4 bg-emerald-500 text-white px-3 py-1.5 rounded-lg text-[9px] font-black uppercase shadow-xl animate-bounce">Pago via PIX</div>
                   </div>
-
-                  {/* Floating Tooltips */}
                   <div className="absolute -top-4 -left-4 bg-[#0f172a] border border-white/10 px-4 py-2 rounded-2xl shadow-2xl z-20 animate-in slide-in-from-left-4">
                      <span className="text-[9px] font-black text-violet-400 uppercase tracking-widest">Sua Logo</span>
                   </div>
@@ -914,23 +1040,19 @@ const App: React.FC = () => {
                      <span className="text-[9px] font-black text-emerald-400 uppercase tracking-widest">Status Automático</span>
                   </div>
                </div>
-
                <p className="text-violet-400 text-sm font-bold uppercase tracking-widest leading-relaxed">
                 Documentos que justificam seu preço, encantam o cliente e autorizam seu faturamento.
                </p>
             </div>
          </div>
       </section>
-
       <section id="pricing" className="w-full py-32 px-6 z-10 max-w-7xl flex flex-col items-center">
          <div className="bg-[#0f172a]/60 backdrop-blur-3xl border border-white/10 rounded-[5rem] p-12 md:p-24 w-full text-center space-y-16 shadow-[0_100px_200px_-50px_rgba(0,0,0,1)] relative overflow-hidden">
             <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1/2 h-1 bg-gradient-to-r from-transparent via-violet-500 to-transparent"></div>
-            
             <header className="space-y-6">
                <h2 className="text-5xl md:text-7xl font-black tracking-tighter">Sua imagem de grife por <br/>menos de <span className="text-emerald-500">1 Real por dia</span>.</h2>
                <p className="text-slate-500 font-bold uppercase tracking-[0.4em] text-[10px]">A oferta definitiva para o MEI profissional</p>
             </header>
-
             <div className="flex flex-col items-center gap-12">
                <div className="space-y-4">
                   <div className="flex items-baseline gap-2 justify-center">
@@ -941,7 +1063,6 @@ const App: React.FC = () => {
                   </div>
                   <p className="text-emerald-400 text-sm font-black uppercase tracking-[0.2em] bg-emerald-400/10 px-6 py-2 rounded-full border border-emerald-400/20">Apenas R$ {dailyPrice} por dia</p>
                </div>
-
                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full max-w-4xl text-left">
                   {[
                      { title: "Ilimitado", desc: "Notas, Contratos e Recibos sem limites.", icon: "♾️" },
@@ -955,15 +1076,10 @@ const App: React.FC = () => {
                      </div>
                   ))}
                </div>
-
-               <button 
-                  onClick={() => { scrollToId('auth-form'); setAuthMode('signup'); }} 
-                  className="px-16 py-8 bg-violet-600 hover:bg-violet-500 text-white rounded-[2.5rem] font-black uppercase text-sm tracking-[0.4em] shadow-2xl hover:scale-105 active:scale-95 transition-all animate-pulse-glow"
-               >
+               <button onClick={() => { scrollToId('auth-form'); setAuthMode('signup'); }} className="px-16 py-8 bg-violet-600 hover:bg-violet-500 text-white rounded-[2.5rem] font-black uppercase text-sm tracking-[0.4em] shadow-2xl hover:scale-105 active:scale-95 transition-all animate-pulse-glow">
                   Garantir Minha Vaga Fundador
                </button>
             </div>
-
             <footer className="pt-12 border-t border-white/5 flex flex-col md:flex-row justify-center gap-12 text-[9px] font-black uppercase tracking-widest text-slate-600">
                <div className="flex items-center gap-3"><span className="text-emerald-500">✓</span> 30 DIAS DE TESTE GRÁTIS</div>
                <div className="flex items-center gap-3"><span className="text-emerald-500">✓</span> CANCELAMENTO INSTANTÂNEO</div>
@@ -971,7 +1087,6 @@ const App: React.FC = () => {
             </footer>
          </div>
       </section>
-
       <footer className="w-full py-20 border-t border-white/5 z-10 text-center space-y-4">
          <div className="text-2xl font-black text-slate-800 uppercase tracking-tighter">NovaInvoice</div>
          <p className="text-[10px] text-slate-700 font-bold uppercase tracking-widest">Feito com precisão para Profissionais de Elite • © 2025</p>
@@ -982,7 +1097,6 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#020617] text-white font-['Inter'] relative">
       <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })} />
-      
       {isWhatsAppModalOpen && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-2xl animate-in fade-in zoom-in duration-300">
             <div className="bg-[#0f172a] w-full max-w-md rounded-[3rem] border border-white/10 p-8 space-y-8 shadow-[0_50px_100px_-20px_rgba(0,0,0,1)]">
@@ -992,7 +1106,6 @@ const App: React.FC = () => {
                 </header>
                 <div className="space-y-6">
                     <InputGroup label="Número do WhatsApp (DDD + Número)" value={whatsAppRecipientPhone} onChange={e => setWhatsAppRecipientPhone(e.target.value)} placeholder="Ex: 11988887777" />
-                    
                     <div className="space-y-2">
                         <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Link do PDF</label>
                         <div className="flex gap-2">
@@ -1014,7 +1127,6 @@ const App: React.FC = () => {
             </div>
         </div>
       )}
-
       <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4">
         {toasts.map(t => (
           <div key={t.id} className={`px-6 py-4 rounded-2xl border backdrop-blur-3xl shadow-2xl animate-in slide-in-from-right-10 ${t.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
@@ -1022,7 +1134,6 @@ const App: React.FC = () => {
           </div>
         ))}
       </div>
-
       {view === 'landing' ? (
         <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center space-y-12 animate-in fade-in duration-700">
           <div className="absolute top-8 right-8"><button onClick={handleLogout} className="text-[10px] font-black text-slate-500 hover:text-red-400 uppercase tracking-widest">Sair</button></div>
@@ -1067,7 +1178,6 @@ const App: React.FC = () => {
                 ))}
              </div>
            </header>
-           
            <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 shadow-xl flex flex-col md:flex-row gap-6">
              <div className="flex-1 relative">
                <input type="text" value={filterSearch} onChange={e => setFilterSearch(e.target.value)} placeholder="Pesquisar..." className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500/50" />
@@ -1075,7 +1185,6 @@ const App: React.FC = () => {
              </div>
              <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none" />
            </section>
-
            <div className="space-y-4">
               {filteredHistory.map(item => (
                 <div key={item.id} className="p-6 md:p-8 bg-white/5 border border-white/10 rounded-[2.5rem] flex flex-col md:flex-row items-center group gap-6">
@@ -1099,7 +1208,8 @@ const App: React.FC = () => {
                             </svg>
                          </button>
                        )}
-                       <button onClick={() => { setData(item.data); setCurrentInvoiceId(item.id); setView('editor'); }} className="px-5 py-3 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-black uppercase hover:text-white transition-all">Abrir</button>
+                       <button onClick={() => { setData(item.data); setCurrentInvoiceId(item.id); setView('editor'); }} className="px-5 py-3 bg-white/5 border border-white/10 rounded-2xl text-[9px] font-black uppercase hover:text-white transition-all">Editar</button>
+                       <button onClick={() => handleDuplicateInvoice(item)} className="px-5 py-3 bg-blue-600/10 text-blue-400 border border-blue-600/20 rounded-2xl text-[9px] font-black uppercase hover:bg-blue-600 hover:text-white transition-all">Duplicar</button>
                        {item.pdfUrl && <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="p-3 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-2xl hover:bg-blue-500 hover:text-white transition-all"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg></a>}
                     </div>
                   </div>
@@ -1109,42 +1219,98 @@ const App: React.FC = () => {
         </div>
       ) : view === 'contracts' ? (
         <div className="flex flex-col lg:flex-row h-screen animate-in fade-in duration-500">
-           <aside className="w-full lg:w-[450px] bg-[#0f172a] border-r border-white/10 p-8 space-y-8 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#0f172a]">
+           <aside className="w-full lg:w-[450px] bg-[#0f172a] border-r border-white/10 p-8 space-y-8 overflow-y-auto lg:h-screen no-print scrollbar-hide">
               <button onClick={() => setView('landing')} className="text-indigo-400 text-[10px] font-black uppercase mb-4">← Voltar</button>
-              <h2 className="text-3xl font-black text-white tracking-tighter">Novo Contrato</h2>
-              <section className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Template do Documento</label>
-                  <select value={contractForm.templateId} onChange={e => setContractForm({...contractForm, templateId: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white appearance-none outline-none focus:border-indigo-500/50">
-                    {CONTRACT_TEMPLATES.map(t => <option key={t.id} value={t.id} className="bg-[#0f172a]">{t.title}</option>)}
-                  </select>
-                </div>
-                <div className="p-6 bg-white/5 border border-white/10 rounded-3xl space-y-4">
-                  <div className="flex justify-between items-center"><span className="text-[10px] font-black text-slate-500 uppercase">Cliente (CONTRATANTE)</span><button onClick={() => setIsContractClientModalOpen(true)} className="px-3 py-1 bg-indigo-500/20 text-indigo-400 rounded-lg text-[8px] font-black uppercase">Selecionar</button></div>
-                  <p className="text-xs font-bold text-white uppercase">{contractClient?.name || 'Não selecionado'}</p>
-                </div>
-                <InputGroup label="Objeto do Serviço" value={contractForm.serviceDesc} onChange={e => setContractForm({...contractForm, serviceDesc: e.target.value})} placeholder="Ex: Desenvolvimento de Web App" isTextArea />
-                <div className="grid grid-cols-2 gap-4">
-                  <InputGroup label="Valor R$" type="number" value={contractForm.value} onChange={e => setContractForm({...contractForm, value: e.target.value})} />
-                  <InputGroup label="Prazo (Dias)" type="number" value={contractForm.deadline} onChange={e => setContractForm({...contractForm, deadline: e.target.value})} />
-                </div>
-                <InputGroup label="Forma de Pagamento" value={contractForm.paymentMethod} onChange={e => setContractForm({...contractForm, paymentMethod: e.target.value})} placeholder="Ex: PIX ou Transferência" />
-                
-                <div className="space-y-3 pt-2">
-                  <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Tipo de Assinatura</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <button onClick={() => setContractForm({...contractForm, signatureType: 'physical'})} className={`py-4 rounded-2xl border font-black text-[9px] uppercase tracking-widest transition-all ${contractForm.signatureType === 'physical' ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Física</button>
-                    <button onClick={() => setContractForm({...contractForm, signatureType: 'digital'})} className={`py-4 rounded-2xl border font-black text-[9px] uppercase tracking-widest transition-all ${contractForm.signatureType === 'digital' ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Digital</button>
+              <div className="flex justify-between items-center mb-6">
+                 <h2 className="text-3xl font-black text-white tracking-tighter">Jurídico Cloud</h2>
+                 <div className="flex bg-white/5 p-1 rounded-xl">
+                   <button onClick={() => setContractsViewTab('new')} className={`px-4 py-2 text-[9px] font-black uppercase rounded-lg transition-all ${contractsViewTab === 'new' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>Novo</button>
+                   <button onClick={() => setContractsViewTab('history')} className={`px-4 py-2 text-[9px] font-black uppercase rounded-lg transition-all ${contractsViewTab === 'history' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>Histórico</button>
+                 </div>
+              </div>
+              {contractsViewTab === 'new' ? (
+                <section className="space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Template do Documento</label>
+                    <select value={contractForm.templateId} onChange={e => setContractForm({...contractForm, templateId: e.target.value})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white appearance-none outline-none focus:border-indigo-500/50">
+                      {CONTRACT_TEMPLATES.map(t => <option key={t.id} value={t.id} className="bg-[#0f172a]">{t.title}</option>)}
+                    </select>
                   </div>
-                  <p className="text-[8px] text-slate-600 font-bold uppercase tracking-widest leading-relaxed mt-2">
-                    {contractForm.signatureType === 'digital' ? 'Selo de autenticidade será inserido no rodapé.' : 'Linhas para assinatura manual serão geradas.'}
-                  </p>
+                  <div className="p-6 bg-white/5 border border-white/10 rounded-3xl space-y-4">
+                    <div className="flex justify-between items-center"><span className="text-[10px] font-black text-slate-500 uppercase">Cliente (CONTRATANTE)</span><button onClick={() => setIsContractClientModalOpen(true)} className="px-3 py-1 bg-indigo-500/20 text-indigo-400 rounded-lg text-[8px] font-black uppercase">Selecionar</button></div>
+                    <p className="text-xs font-bold text-white uppercase">{contractClient?.name || 'Não selecionado'}</p>
+                  </div>
+                  <InputGroup label="Objeto do Serviço" value={contractForm.serviceDesc} onChange={e => setContractForm({...contractForm, serviceDesc: e.target.value})} placeholder="Ex: Desenvolvimento de Web App" isTextArea />
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Periodicidade</label>
+                      <select value={contractForm.periodicity} onChange={e => setContractForm({...contractForm, periodicity: e.target.value as ContractPeriodicity})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white appearance-none outline-none focus:border-indigo-500/50">
+                        <option value="one-time" className="bg-[#0f172a]">Pontual</option>
+                        <option value="monthly" className="bg-[#0f172a]">Mensal (Recorrente)</option>
+                        <option value="periodic" className="bg-[#0f172a]">Periódico</option>
+                      </select>
+                    </div>
+                    <InputGroup label="Prazo (Dias)" type="number" value={contractForm.deadline} onChange={e => setContractForm({...contractForm, deadline: e.target.value})} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <InputGroup label="Valor R$" type="number" value={contractForm.value} onChange={e => setContractForm({...contractForm, value: e.target.value})} />
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Status Inicial</label>
+                      <select value={contractForm.status} onChange={e => setContractForm({...contractForm, status: e.target.value as ContractStatus})} className="w-full p-4 bg-white/5 border border-white/10 rounded-2xl text-sm text-white appearance-none outline-none focus:border-indigo-500/50">
+                        <option value="active" className="bg-[#0f172a]">Em Vigor</option>
+                        <option value="finished" className="bg-[#0f172a]">Finalizado</option>
+                        <option value="canceled" className="bg-[#0f172a]">Cancelado</option>
+                      </select>
+                    </div>
+                  </div>
+                  <InputGroup label="Forma de Pagamento" value={contractForm.paymentMethod} onChange={e => setContractForm({...contractForm, paymentMethod: e.target.value})} placeholder="Ex: PIX ou Transferência" />
+                  <div className="space-y-3 pt-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Tipo de Assinatura</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button onClick={() => setContractForm({...contractForm, signatureType: 'physical'})} className={`py-4 rounded-2xl border font-black text-[9px] uppercase tracking-widest transition-all ${contractForm.signatureType === 'physical' ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Física</button>
+                      <button onClick={() => setContractForm({...contractForm, signatureType: 'digital'})} className={`py-4 rounded-2xl border font-black text-[9px] uppercase tracking-widest transition-all ${contractForm.signatureType === 'digital' ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg' : 'bg-white/5 border-white/10 text-slate-600'}`}>Digital</button>
+                    </div>
+                  </div>
+                  <button disabled={isEmitting} onClick={handleGenerateContract} className="w-full py-6 bg-indigo-600 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl shadow-indigo-600/20 active:scale-95 transition-all mt-4">{isEmitting ? 'Emitindo...' : 'Gerar & Salvar Contrato'}</button>
+                </section>
+              ) : (
+                <div className="space-y-6">
+                   <div className="relative">
+                     <input type="text" value={contractFilterSearch} onChange={e => setContractFilterSearch(e.target.value)} placeholder="Pesquisar cliente..." className="w-full pl-10 pr-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-xs outline-none" />
+                     <svg className="absolute left-3 top-3 text-slate-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" cy1="21" x2="16.65" y2="16.65"></line></svg>
+                   </div>
+                   <div className="space-y-3">
+                     {filteredContractHistory.map(item => (
+                       <div key={item.id} className="p-4 bg-white/5 border border-white/10 rounded-2xl space-y-4 group hover:border-indigo-500/50 transition-all">
+                         <div className="flex justify-between items-start">
+                           <div className="space-y-1">
+                             <h4 className="text-xs font-black text-white uppercase truncate max-w-[150px]">{item.clientName}</h4>
+                             <div className="flex gap-2 items-center">
+                               <span className={`text-[7px] font-black uppercase px-1.5 py-0.5 rounded border ${item.status === 'active' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-500' : 'bg-rose-500/10 border-rose-500/20 text-rose-500'}`}>
+                                 {item.status === 'active' ? 'Em Vigor' : item.status === 'finished' ? 'Finalizado' : 'Cancelado'}
+                               </span>
+                               <span className="text-[7px] font-black uppercase text-slate-600">Ref: {item.contractHash}</span>
+                             </div>
+                           </div>
+                           <span className="text-sm font-black text-indigo-400">{formatCurrency(item.value)}</span>
+                         </div>
+                         <div className="flex gap-2">
+                            <button onClick={() => handleOpenWhatsAppModalFromContract(item)} className="p-2 bg-emerald-600/10 text-emerald-500 border border-emerald-600/20 rounded-lg hover:bg-emerald-600 hover:text-white transition-all" title="WhatsApp">
+                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                            </button>
+                            <button onClick={() => handleCreateInvoiceFromContract(item)} className="flex-1 py-2 bg-blue-600/10 text-blue-400 border border-blue-600/20 rounded-lg text-[8px] font-black uppercase text-center hover:bg-blue-600 hover:text-white transition-all">
+                               Gerar Fatura
+                            </button>
+                            <a href={item.pdfUrl} target="_blank" rel="noreferrer" className="px-3 py-2 bg-white/5 text-slate-500 border border-white/5 rounded-lg text-[8px] font-black uppercase text-center hover:text-white transition-all">Ver PDF</a>
+                         </div>
+                       </div>
+                     ))}
+                   </div>
                 </div>
-              </section>
-              <button disabled={isEmitting} onClick={handleGenerateContract} className="w-full py-6 bg-indigo-600 text-white font-black rounded-3xl uppercase tracking-widest shadow-xl shadow-indigo-600/20 active:scale-95 transition-all">{isEmitting ? 'Gerando...' : 'Gerar Contrato PDF'}</button>
+              )}
            </aside>
            <main className="flex-1 bg-[#020617] p-10 flex justify-center items-start overflow-y-auto overflow-x-hidden scrollbar-hide">
-              <div className="origin-top scale-[0.55] sm:scale-[0.75] lg:scale-[0.7] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700 mx-auto">
+              <div ref={contractRef} className="origin-top scale-[0.55] sm:scale-[0.75] lg:scale-[0.7] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700 mx-auto">
                 <ContractPreview 
                   content={parseContractTemplateText(CONTRACT_TEMPLATES.find(t => t.id === contractForm.templateId)?.content || '')}
                   provider={data.provider}
@@ -1152,6 +1318,7 @@ const App: React.FC = () => {
                   branding={data.branding}
                   signatureType={contractForm.signatureType}
                   docId={session.user.id}
+                  contractHash={currentContractHash}
                 />
               </div>
            </main>
@@ -1172,9 +1339,7 @@ const App: React.FC = () => {
                ))}
             </div>
           </header>
-
           <section>{renderFilterStatus()}</section>
-
           {financialTab === 'crm' ? (
             <div className="space-y-12 animate-in slide-in-from-bottom-4">
                <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
@@ -1198,7 +1363,6 @@ const App: React.FC = () => {
                       ))}
                     </div>
                   </div>
-
                   <div className="bg-rose-500/5 border border-rose-500/10 p-10 rounded-[3.5rem] space-y-8 shadow-2xl">
                     <header>
                       <h3 className="text-2xl font-black text-white tracking-tight uppercase">Clientes Sumidos</h3>
@@ -1253,14 +1417,8 @@ const App: React.FC = () => {
             <div className="space-y-12">
               <div className="flex flex-col md:flex-row gap-4 mb-8">
                 <div className="flex-1 relative">
-                  <input 
-                    type="text" 
-                    value={expFilterSearch} 
-                    onChange={e => setExpFilterSearch(e.target.value)} 
-                    placeholder="Pesquisar despesa..." 
-                    className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-emerald-500/50" 
-                  />
-                  <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                  <input type="text" value={expFilterSearch} onChange={e => setExpFilterSearch(e.target.value)} placeholder="Pesquisar despesa..." className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-emerald-500/50" />
+                  <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" cy1="21" x2="16.65" y2="16.65"></line></svg>
                 </div>
                 <select value={expFilterCategory} onChange={e => setExpFilterCategory(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none cursor-pointer">
                   <option value="all" className="bg-[#0f172a]">Todas Categorias</option>
@@ -1268,7 +1426,6 @@ const App: React.FC = () => {
                 </select>
                 <input type="month" value={expFilterMonth} onChange={e => setExpFilterMonth(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none" />
               </div>
-
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-12">
                  <div className="lg:col-span-1">
                    <form onSubmit={handleAddExpense} className="bg-white/5 border border-white/10 p-10 rounded-[3rem] space-y-8 shadow-2xl sticky top-8">
@@ -1380,7 +1537,6 @@ const App: React.FC = () => {
               <button onClick={() => setEditorActiveTab('preview')} className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${editorActiveTab === 'preview' ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-500'}`}>Documento</button>
             </div>
           </div>
-
           <div className="flex flex-col lg:flex-row flex-1 relative">
             <aside ref={sidebarRef} className={`w-full lg:w-[500px] bg-[#0f172a]/90 backdrop-blur-3xl border-r border-white/10 p-6 md:p-10 space-y-12 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#0f172a] ${editorActiveTab === 'preview' ? 'hidden lg:block' : 'block'}`}>
               <header className="hidden lg:flex justify-between items-center mb-6">
@@ -1390,7 +1546,6 @@ const App: React.FC = () => {
                    <button onClick={() => setView('landing')} className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-2xl text-rose-500 hover:bg-rose-500 hover:text-white transition-all"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg></button>
                  </div>
               </header>
-
               <div className="space-y-12 pb-24">
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Identidade Visual</h3>
@@ -1411,7 +1566,7 @@ const App: React.FC = () => {
                        <div className="flex-1 w-full space-y-4">
                          <button onClick={() => fileInputRef.current?.click()} className="text-[9px] font-black w-full py-4 bg-white/5 border border-white/10 rounded-2xl uppercase tracking-widest hover:bg-white/10 transition-all">Alterar Imagem</button>
                          <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleLogoUpload} />
-                         <InputGroup label="Logo Letra" value={data.branding.logoLetter} onChange={(e) => setData(prev => ({ ...prev, branding: { ...prev.branding, logo_letter: e.target.value.substring(0,1).toUpperCase() } }))} />
+                         <InputGroup label="Logo Letra" value={data.branding.logoLetter} onChange={(e) => setData(prev => ({ ...prev, branding: { ...prev.branding, logoLetter: e.target.value.substring(0,1).toUpperCase() } }))} />
                        </div>
                      </div>
                      <div className="grid grid-cols-2 gap-5">
@@ -1420,7 +1575,6 @@ const App: React.FC = () => {
                      </div>
                    </div>
                 </section>
-
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-6 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Rótulos do Documento</h3>
                    <div className="flex flex-wrap gap-2 mb-4">
@@ -1431,7 +1585,6 @@ const App: React.FC = () => {
                    <InputGroup label="Título Principal" value={data.labels.documentTitle} onChange={e => setData(prev => ({ ...prev, labels: { ...prev.labels, documentTitle: e.target.value } }))} />
                    <InputGroup label="Subtítulo" value={data.labels.documentSubtitle} onChange={e => setData(prev => ({ ...prev, labels: { ...prev.labels, documentSubtitle: e.target.value } }))} />
                 </section>
-
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Faturamento</h3>
                    <div className="space-y-6">
@@ -1452,12 +1605,9 @@ const App: React.FC = () => {
                       </div>
                    </div>
                 </section>
-
                 <EntityForm title="Informações do Prestador" entity={data.provider} updateFn={updateProvider} isProvider onSave={handleSaveProfile} isSaving={isSavingProfile} />
                 <section className="bg-white/5 p-6 rounded-[2.5rem] border border-white/10 shadow-2xl"><InputGroup label="Chave PIX" value={data.provider.pixKey || ''} onChange={e => updateProvider('pixKey', e.target.value)} /></section>
-                
                 <EntityForm title="Dados do Tomador (Cliente)" entity={data.client} updateFn={updateClient} isClient onSearch={() => setIsModalOpen(true)} onSave={handleSaveClient} isSaving={isSavingClient} />
-
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <header className="flex justify-between items-center">
                       <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Itens</h3>
@@ -1477,7 +1627,6 @@ const App: React.FC = () => {
                      ))}
                    </div>
                 </section>
-
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Fiscal</h3>
                    <div className="space-y-6">
@@ -1489,12 +1638,10 @@ const App: React.FC = () => {
                       </div>
                    </div>
                 </section>
-
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-6 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Observações</h3>
                    <InputGroup label="Informações Adicionais" value={data.notes} onChange={e => setData(prev => ({ ...prev, notes: e.target.value }))} isTextArea />
                 </section>
-
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Configurações de Envio</h3>
                    <div className="space-y-4">
@@ -1516,34 +1663,21 @@ const App: React.FC = () => {
                       </div>
                    </div>
                 </section>
-
-                <button 
-                    onClick={scrollToTop}
-                    className="w-full py-6 mt-4 text-slate-500 font-black uppercase text-[11px] tracking-[0.3em] hover:text-white transition-all flex items-center justify-center gap-3 bg-white/5 rounded-[2.5rem] border border-white/5 hover:border-white/20 shadow-xl"
-                >
+                <button onClick={scrollToTop} className="w-full py-6 mt-4 text-slate-500 font-black uppercase text-[11px] tracking-[0.3em] hover:text-white transition-all flex items-center justify-center gap-3 bg-white/5 rounded-[2.5rem] border border-white/5 hover:border-white/20 shadow-xl">
                     <div className="w-8 h-8 rounded-full bg-white/5 flex items-center justify-center">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><polyline points="18 15 12 9 6 15"></polyline></svg>
                     </div>
                     Subir ao Topo
                 </button>
-
                 <div className="sticky bottom-0 bg-[#0f172a]/95 pt-10 pb-16 border-t border-white/10 z-30 lg:block hidden">
                    <div className="flex flex-col gap-4">
-                        <button 
-                            disabled={!data.pdfUrl} 
-                            onClick={() => setIsWhatsAppModalOpen(true)} 
-                            className={`w-full py-5 rounded-[2.5rem] text-white font-black uppercase text-[10px] tracking-widest transition-all flex items-center justify-center gap-3 ${!data.pdfUrl ? 'bg-slate-800 text-slate-600' : 'bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/20 active:scale-95'}`}
-                        >
+                        <button disabled={!data.pdfUrl} onClick={() => setIsWhatsAppModalOpen(true)} className={`w-full py-5 rounded-[2.5rem] text-white font-black uppercase text-[10px] tracking-widest transition-all flex items-center justify-center gap-3 ${!data.pdfUrl ? 'bg-slate-800 text-slate-600' : 'bg-emerald-600 hover:bg-emerald-500 shadow-xl shadow-emerald-600/20 active:scale-95'}`}>
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
                                 <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path>
                             </svg>
                             {data.pdfUrl ? 'Enviar p/ WhatsApp' : 'Gere o PDF para Enviar'}
                         </button>
-                        <button 
-                            disabled={isEmitting} 
-                            onClick={handlePrint} 
-                            className={`w-full py-8 rounded-[3rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'}`}
-                        >
+                        <button disabled={isEmitting} onClick={handlePrint} className={`w-full py-8 rounded-[3rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'}`}>
                             {isEmitting ? 'Gerando...' : 'Gerar PDF Premium'}
                         </button>
                    </div>
