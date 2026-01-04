@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { Entity } from '../types';
 
@@ -48,6 +47,7 @@ export const ClientSearchModal: React.FC<ClientSearchModalProps> = ({
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-sm focus:outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all"
             />
+            {/* Fixed cy1 to y1 */}
             <svg className="absolute left-4 top-4.5 text-slate-600" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
           </div>
         </div>

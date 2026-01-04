@@ -8,6 +8,15 @@ export type ContractComplexity = 'basic' | 'intermediate' | 'advanced';
 
 export type ViewState = 'landing' | 'editor' | 'history' | 'financial-hub' | 'contracts' | 'validator';
 
+export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'unpaid' | 'none';
+
+export interface UserSubscription {
+  status: SubscriptionStatus;
+  trial_ends_at: string;
+  price_id?: string;
+  is_founder?: boolean;
+}
+
 export interface ContractClauses {
   fines: boolean;
   resignation: boolean;

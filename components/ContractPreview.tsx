@@ -24,8 +24,11 @@ export const ContractPreview: React.FC<ContractPreviewProps> = ({
 }) => {
   const primaryColor = branding.primaryColor;
   const today = new Date().toLocaleDateString('pt-BR');
-  const displayHash = externalHash || (docId.split('-')[0].toUpperCase() + "REF");
-  const validationUrl = getContractValidationUrl(displayHash);
+  
+  // Define o hash: Prioridade para o hash real vindo do banco, senão um placeholder visual
+  const isRealHash = !!externalHash && externalHash !== 'S/N';
+  const displayHash = isRealHash ? externalHash : "PENDENTE";
+  const validationUrl = getContractValidationUrl(isRealHash ? externalHash : '');
 
   const formatTaxDetails = (e: Entity) => {
     let details = `Doc: ${e.taxId}`;
@@ -77,7 +80,7 @@ export const ContractPreview: React.FC<ContractPreviewProps> = ({
         <div style={{ textAlign: 'right', fontFamily: 'Inter' }}>
           <h2 style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: '#94a3b8', margin: 0 }}>Referência Técnica</h2>
           <h3 style={{ fontSize: '22px', fontWeight: '900', textTransform: 'uppercase', color: '#0f172a', margin: '4px 0' }}>Contrato de Serviço</h3>
-          <div style={{ marginTop: '12px', padding: '4px 12px', display: 'inline-block', borderRadius: '8px', fontSize: '10px', fontWeight: '700', color: 'white', backgroundColor: primaryColor }}>
+          <div style={{ marginTop: '12px', padding: '4px 12px', display: 'inline-block', borderRadius: '8px', fontSize: '10px', fontWeight: '700', color: 'white', backgroundColor: isRealHash ? primaryColor : '#cbd5e1' }}>
             Ref: {displayHash}
           </div>
         </div>
@@ -169,10 +172,12 @@ export const ContractPreview: React.FC<ContractPreviewProps> = ({
           </div>
         ) : (
           <div style={{ backgroundColor: '#0f172a', padding: '30px', borderRadius: '32px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: 'white' }}>
-            <div>
+            <div style={{ flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-                <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#10b981' }}></div>
-                <span style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: '#10b981', letterSpacing: '0.2em' }}>Autenticado Digitalmente</span>
+                <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: isRealHash ? '#10b981' : '#f59e0b' }}></div>
+                <span style={{ fontSize: '10px', fontWeight: '900', textTransform: 'uppercase', color: isRealHash ? '#10b981' : '#f59e0b', letterSpacing: '0.2em' }}>
+                  {isRealHash ? 'Autenticado Digitalmente' : 'Aguardando Emissão'}
+                </span>
               </div>
               <div style={{ fontFamily: 'monospace', fontSize: '9px', color: '#94a3b8', lineHeight: '1.6' }}>
                 <p>ID: {displayHash.toUpperCase()}-{Date.now()}</p>
@@ -180,14 +185,16 @@ export const ContractPreview: React.FC<ContractPreviewProps> = ({
                 <p>DATA: {today} • {new Date().toLocaleTimeString('pt-BR')}</p>
               </div>
             </div>
-            <div style={{ backgroundColor: 'white', padding: '8px', borderRadius: '12px' }}>
-              <img 
-                src={getQrCodeUrl(validationUrl, "100x100")} 
-                alt="Validation QR" 
-                style={{ width: '60px', height: '60px', display: 'block' }} 
-                crossOrigin="anonymous"
-              />
-            </div>
+            {validationUrl && (
+              <div style={{ backgroundColor: 'white', padding: '12px', borderRadius: '16px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img 
+                  src={getQrCodeUrl(validationUrl, "200x200")} 
+                  alt="Validation QR" 
+                  style={{ width: '100px', height: '100px', display: 'block' }} 
+                  crossOrigin="anonymous"
+                />
+              </div>
+            )}
           </div>
         )}
         <div style={{ marginTop: '50px', display: 'flex', justifyContent: 'space-between', fontSize: '9px', fontWeight: '900', color: '#cbd5e1', textTransform: 'uppercase', letterSpacing: '0.3em' }}>

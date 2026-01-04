@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { InvoiceData, Entity } from '../types';
 import { formatCurrency, getPixQrCodeUrl, formatDate } from '../utils/formatters';
@@ -126,7 +125,11 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
           {data.provider.pixKey && (
              <>
                <span className="text-[7px] font-black uppercase mb-1 text-slate-900">Pagamento via PIX</span>
-               <img src={getPixQrCodeUrl(data.provider.pixKey, total, data.provider.name, data.provider.city)} className="w-20 h-20" />
+               <img 
+                 src={getPixQrCodeUrl(data.provider.pixKey, total, data.provider.name, data.provider.city)} 
+                 className="w-20 h-20" 
+                 alt="PIX QR Code"
+               />
                <span className="text-[7px] font-mono mt-1 text-slate-600">{data.provider.pixKey}</span>
              </>
           )}
@@ -200,7 +203,11 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
         <div className="w-1/2 flex items-center gap-6">
             {data.provider.pixKey && (
                <>
-                 <img src={getPixQrCodeUrl(data.provider.pixKey, total, data.provider.name, data.provider.city)} className="w-20 h-20 shadow-sm" />
+                 <img 
+                   src={getPixQrCodeUrl(data.provider.pixKey, total, data.provider.name, data.provider.city)} 
+                   className="w-20 h-20 shadow-sm" 
+                   alt="PIX QR Code"
+                 />
                  <div>
                     <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-1">Pagamento Pix</p>
                     <p className="text-[11px] font-bold text-slate-800">{data.provider.pixKey}</p>
@@ -236,6 +243,7 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-tight">{item.entity.name}</h3>
               <p className="text-[8px] text-slate-400 font-black uppercase tracking-widest">Doc: {item.entity.taxId}</p>
               {(item.entity.im || item.entity.ie) && (
+                /* Removed stray closing span tag that was causing JSX parsing errors */
                 <p className="text-[8px] text-slate-400 font-black uppercase tracking-widest">IM/IE: {item.entity.im || '-'}/{item.entity.ie || '-'}</p>
               )}
             </div>
@@ -251,7 +259,16 @@ export const InvoicePreview: React.FC<InvoicePreviewProps> = ({ data }) => {
        </div>
        <div className="mt-24">
           <div className="flex justify-between items-center py-6 border-t-2 border-slate-900 w-full">
-             <span className="text-[11px] font-black uppercase tracking-[0.4em] text-slate-400">Total Líquido</span>
+             <div className="flex items-center gap-4">
+               {data.provider.pixKey && (
+                 <img 
+                   src={getPixQrCodeUrl(data.provider.pixKey, total, data.provider.name, data.provider.city)} 
+                   className="w-16 h-16 grayscale hover:grayscale-0 transition-all" 
+                   alt="PIX QR Code"
+                 />
+               )}
+               <span className="text-[11px] font-black uppercase tracking-[0.4em] text-slate-400">Total Líquido</span>
+             </div>
              <span className="text-2xl font-black tracking-tighter text-slate-900">{formatCurrency(total)}</span>
           </div>
        </div>

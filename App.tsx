@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment, PaymentStatus, SignatureType, ContractHistoryItem, ContractStatus, ContractPeriodicity, ContractComplexity, ContractClauses, ViewState } from './types';
 import { InputGroup } from './components/InputGroup';
@@ -5,9 +6,11 @@ import { InvoicePreview } from './components/InvoicePreview';
 import { ContractPreview } from './components/ContractPreview';
 import { ClientSearchModal } from './components/ClientSearchModal';
 import { ConfirmDialog } from './components/ConfirmDialog';
+import { SubscriptionGate } from './components/SubscriptionGate';
 import { formatCurrency, formatDate } from './utils/formatters';
 import { supabase } from './lib/supabase';
 import { CONTRACT_TEMPLATES, generateContractContent } from './utils/contracts';
+import { useSubscription, STRIPE_PRICES } from './hooks/useSubscription';
 
 const INITIAL_LABELS: InvoiceLabels = {
   documentTitle: 'Recibo de Prestação de Serviços',
@@ -64,6 +67,7 @@ const EMPTY_ENTITY: Entity = {
   email: '',
   phone: '',
   whatsapp: '',
+  pixKey: '',
 };
 
 const INITIAL_PROVIDER: Entity = {
@@ -159,6 +163,16 @@ const EntityForm: React.FC<EntityFormProps> = ({ title, entity, updateFn, isClie
         <InputGroup label="E-mail" value={entity.email} onChange={(e) => updateFn('email', e.target.value)} />
       </div>
       {isClient && <InputGroup label="WhatsApp" value={entity.whatsapp || ''} onChange={(e) => updateFn('whatsapp', e.target.value)} />}
+      
+      {!isClient && (
+        <InputGroup 
+          label="Chave PIX (Padrão do Documento)" 
+          value={entity.pixKey || ''} 
+          onChange={(e) => updateFn('pixKey', e.target.value)} 
+          placeholder="CPF, CNPJ, E-mail ou Aleatória"
+        />
+      )}
+
       <div className="pt-6 border-t border-white/5 space-y-4">
         <div className="grid grid-cols-12 gap-4">
           <div className="col-span-4"><InputGroup label="CEP" value={entity.zipCode || ''} onChange={(e) => updateFn('zipCode', e.target.value)} /></div>
@@ -181,7 +195,10 @@ interface Toast { id: number; message: string; type: 'success' | 'error' | 'info
 
 const App: React.FC = () => {
   const [session, setSession] = useState<any>(null);
-  const [view, setView] = useState<ViewState>('landing');
+  const [view, setView] = useState<ViewState>(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('v') ? 'validator' : 'landing';
+  });
   const [data, setData] = useState<InvoiceData>(INITIAL_DATA);
   const [currentInvoiceId, setCurrentInvoiceId] = useState<string | null>(null);
   const [currentContractId, setCurrentContractId] = useState<string | null>(null);
@@ -192,10 +209,10 @@ const App: React.FC = () => {
   const [dasPayments, setDasPayments] = useState<DasPayment[]>([]);
   const [userCount, setUserCount] = useState(0);
 
-  // Estados do Portal de Validação
+  const [isReviewModalOpen, setIsReviewModalOpen] = useState(false);
+
   const [validatedContract, setValidatedContract] = useState<ContractHistoryItem | null>(null);
   const [isValidating, setIsValidating] = useState(false);
-  const [validationHash, setValidationHash] = useState<string | null>(null);
   
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [whatsAppRecipientPhone, setWhatsAppRecipientPhone] = useState('');
@@ -269,6 +286,9 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sidebarRef = useRef<HTMLElement>(null);
 
+  // Subscription Hook Integration
+  const { isTrialActive, isPremium, mustPay, spotsLeft, daysRemaining, refresh: refreshSub } = useSubscription(session?.user?.id);
+
   const currentContractHash = useMemo(() => {
     if (currentContractId) {
       const existing = contractHistory.find(c => c.id === currentContractId);
@@ -279,13 +299,18 @@ const App: React.FC = () => {
   }, [contractForm.templateId, contractClient?.taxId, currentContractId, session?.user?.id]);
 
   useEffect(() => {
-    // Verificação de Validação por URL ANTES da sessão
     const params = new URLSearchParams(window.location.search);
     const hash = params.get('v');
+    const success = params.get('success');
+
     if (hash) {
-      setValidationHash(hash);
-      setView('validator');
       handleValidateContract(hash);
+    }
+
+    if (success === 'true') {
+      showToast("Pagamento confirmado! Bem-vindo ao Premium.", "success");
+      // Limpa a URL para não mostrar o toast toda hora que der refresh
+      window.history.replaceState({}, '', window.location.pathname);
     }
 
     supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
@@ -303,7 +328,6 @@ const App: React.FC = () => {
   const handleValidateContract = async (hash: string) => {
     setIsValidating(true);
     try {
-      // Nota: Esta query exige que o RLS do Supabase permita leitura anônima via hash
       const { data: contract, error } = await supabase
         .from('contracts')
         .select('*')
@@ -360,6 +384,51 @@ const App: React.FC = () => {
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
   };
 
+  const handleStripeCheckout = async () => {
+    if (!session?.user) return showToast("Acesse sua conta para assinar.", "error");
+    
+    const priceId = spotsLeft > 0 ? STRIPE_PRICES.FOUNDER : STRIPE_PRICES.REGULAR;
+    
+    showToast("Preparando checkout seguro...", "info");
+    
+    try {
+      console.log("Chamando Edge Function 'create-checkout-session'...");
+      
+      const { data: edgeData, error: edgeError } = await supabase.functions.invoke('create-checkout-session', {
+        body: { 
+          priceId,
+          userId: session.user.id,
+          userEmail: session.user.email,
+          returnUrl: window.location.origin
+        }
+      });
+
+      if (edgeError) {
+        console.error("Erro na Edge Function:", edgeError);
+        throw new Error(edgeError.message || "Erro de rede ao conectar com o servidor.");
+      }
+
+      if (edgeData?.url) {
+        window.location.href = edgeData.url;
+      } else if (edgeData?.error) {
+        throw new Error(edgeData.error);
+      } else {
+        throw new Error("Resposta do servidor de checkout inválida.");
+      }
+    } catch (err: any) {
+      console.error("Erro completo no checkout:", err);
+      
+      // Mensagem amigável para erro de CORS/Preflight (geralmente net::ERR_FAILED)
+      const isConnectionError = err.message?.includes('Fetch') || err.message?.includes('failed to fetch');
+      
+      const msg = isConnectionError 
+        ? "Erro de conexão: Verifique se sua Edge Function no Supabase está ativa e com cabeçalhos CORS configurados (OPTIONS request)." 
+        : `Erro: ${err.message || 'Tente novamente em instantes.'}`;
+        
+      showToast(msg, "error");
+    }
+  };
+
   const loadProfile = async () => {
     const { data: profile } = await supabase.from('profiles').select('*').maybeSingle();
     if (profile) {
@@ -372,7 +441,8 @@ const App: React.FC = () => {
           zipCode: profile.zip_code,
           im: profile.im,
           ie: profile.ie,
-          neighborhood: profile.neighborhood
+          neighborhood: profile.neighborhood,
+          pixKey: profile.pix_key || '' 
         },
         branding: {
           primaryColor: profile.primary_color || INITIAL_BRANDING.primaryColor,
@@ -441,7 +511,7 @@ const App: React.FC = () => {
   };
 
   const loadDasPayments = async () => {
-    const { data: list } = await supabase.from('das_payments').select('*');
+    const { data: list = [] } = await supabase.from('das_payments').select('*');
     if (list) setDasPayments(list.map(d => ({ id: d.id, year: d.year, month: d.month, isPaid: d.is_paid })));
   };
 
@@ -612,7 +682,6 @@ const App: React.FC = () => {
       setIsWhatsAppModalOpen(true);
   };
 
-  // Fix: Added missing handleDuplicateInvoice function to resolve the reference error on line 1364
   const handleDuplicateInvoice = (item: InvoiceHistoryItem) => {
     setData({
       ...item.data,
@@ -647,7 +716,7 @@ const App: React.FC = () => {
     setData(newData);
     setCurrentInvoiceId(null);
     setView('editor');
-    showToast('Editor preenchido com faturamento do contrato!', 'success');
+    showToast('Dados do contrato vinculados ao editor!', 'success');
   };
 
   const generateMultiPagePdf = async (elementId: string, fileName: string): Promise<{ pdfBlob: Blob, finalUrl: string | null, localPdf: any }> => {
@@ -718,6 +787,7 @@ const App: React.FC = () => {
   };
 
   const handleGenerateContract = async () => {
+    if (mustPay) return handleStripeCheckout();
     if (!contractClient || !contractRef.current) return showToast('Selecione um cliente e preencha os dados.', 'error');
     setIsEmitting(true);
     await new Promise(r => setTimeout(r, 1000));
@@ -761,15 +831,18 @@ const App: React.FC = () => {
   };
 
   const handlePrint = async () => {
+    if (mustPay) return handleStripeCheckout();
     if (!invoiceRef.current) return;
     setIsEmitting(true);
+    setIsReviewModalOpen(false);
     await new Promise(r => setTimeout(r, 1000)); 
     
     try {
       const { finalUrl, localPdf } = await generateMultiPagePdf('invoice-capture', `doc_${data.invoiceNumber}`);
       
-      const subtotalVal = data.items.reduce((a, b) => a + (b.quantity * b.unitValue), 0);
-      const totalVal = subtotalVal - (data.discount || 0);
+      const subtotalVal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
+      const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
+      const totalVal = subtotalVal - totalTaxes - (data.discount || 0);
       
       const payload = {
         user_id: session.user.id,
@@ -797,6 +870,7 @@ const App: React.FC = () => {
   };
 
   const handleSaveProfile = async () => {
+    if (mustPay) return handleStripeCheckout();
     if (!session?.user) return;
     setIsSavingProfile(true);
     const { error } = await supabase.from('profiles').upsert({
@@ -813,7 +887,7 @@ const App: React.FC = () => {
       uf: data.provider.uf,
       email: data.provider.email,
       phone: data.provider.phone,
-      pix_key: data.provider.pixKey,
+      pix_key: data.provider.pixKey, 
       primary_color: data.branding.primaryColor,
       secondary_color: data.branding.secondaryColor,
       logo_letter: data.branding.logoLetter,
@@ -824,6 +898,7 @@ const App: React.FC = () => {
   };
 
   const handleSaveClient = async () => {
+    if (mustPay) return handleStripeCheckout();
     if (!session?.user || !data.client.name) return;
     setIsSavingClient(true);
     const { error } = await supabase.from('clients').upsert({
@@ -848,6 +923,7 @@ const App: React.FC = () => {
   };
 
   const toggleDasPayment = async (year: number, month: number) => {
+    if (mustPay) return handleStripeCheckout();
     const existing = dasPayments.find(d => d.year === year && d.month === month);
     const newVal = !existing?.isPaid;
     const { error } = await supabase.from('das_payments').upsert({ user_id: session.user.id, year, month, is_paid: newVal }, { onConflict: 'user_id,year,month' });
@@ -856,6 +932,7 @@ const App: React.FC = () => {
 
   const handleAddExpense = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (mustPay) return handleStripeCheckout();
     const amount = parseFloat(expenseForm.amount);
     if (!expenseForm.description || isNaN(amount)) return showToast('Valores inválidos.', 'error');
     const { error } = await supabase.from('expenses').insert({ 
@@ -874,11 +951,13 @@ const App: React.FC = () => {
   };
 
   const handleDeleteExpense = async (id: string) => {
+    if (mustPay) return handleStripeCheckout();
     const { error } = await supabase.from('expenses').delete().eq('id', id);
     if (!error) { showToast('Despesa removida.', 'info'); loadExpenses(); }
   };
 
   const handleExportPack = () => {
+    if (mustPay) return handleStripeCheckout();
     const [year, month] = exportMonth.split('-');
     const filteredHist = history.filter(h => {
         const d = new Date(h.timestamp);
@@ -948,6 +1027,7 @@ const App: React.FC = () => {
   };
 
   const handleGenerateMeiReportPdf = async () => {
+    if (mustPay) return handleStripeCheckout();
     const [year, month] = exportMonth.split('-');
     setIsEmitting(true);
     await new Promise(r => setTimeout(r, 1000));
@@ -1197,6 +1277,79 @@ const App: React.FC = () => {
     </div>
   );
 
+  const ReviewModal = () => {
+    const subtotal = data.items.reduce((acc, item) => acc + (item.quantity * item.unitValue), 0);
+    const totalTaxes = (Object.values(data.taxes) as number[]).reduce((a, b) => a + b, 0);
+    const total = subtotal - totalTaxes - (data.discount || 0);
+
+    return (
+      <div className="fixed inset-0 z-[500] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-3xl animate-in fade-in zoom-in duration-300">
+        <div className="bg-[#0f172a] w-full max-w-xl rounded-[3rem] border border-white/10 p-10 space-y-8 shadow-[0_50px_100px_-20px_rgba(0,0,0,1)]">
+          <header className="space-y-2">
+            <h3 className="text-3xl font-black text-white tracking-tighter uppercase">Revisão Pré-Emissão</h3>
+            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Ajustes finais para o documento #{data.invoiceNumber}</p>
+          </header>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="p-6 bg-white/5 rounded-3xl border border-white/10">
+              <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Cliente</span>
+              <span className="text-xs font-black text-white uppercase truncate block">{data.client.name}</span>
+            </div>
+            <div className="p-6 bg-white/5 rounded-3xl border border-white/10">
+              <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest block mb-1">Valor Líquido</span>
+              <span className="text-xs font-black text-emerald-400 uppercase">{formatCurrency(total)}</span>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+             <InputGroup 
+                label="Inserção de Dados Pré-PDF (Observações Específicas)" 
+                value={data.notes} 
+                onChange={e => setData({...data, notes: e.target.value})} 
+                isTextArea 
+                placeholder="Ex: Nota referente ao contrato de Janeiro. Pagamento via PIX CNPJ..."
+             />
+             <div className="grid grid-cols-2 gap-4">
+               <InputGroup 
+                  label="Chave PIX Sugerida" 
+                  value={data.provider.pixKey || ''} 
+                  onChange={e => updateProvider('pixKey', e.target.value)} 
+                  placeholder="Seu CPF/CNPJ ou E-mail"
+               />
+               <div className="space-y-2">
+                 <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Status Inicial</label>
+                 <select 
+                    value={data.status} 
+                    onChange={e => setData({...data, status: e.target.value as PaymentStatus})}
+                    className="w-full px-4 py-3 bg-white/5 border border-white/10 rounded-2xl text-xs text-white outline-none focus:border-blue-500/50"
+                 >
+                   <option value="pending" className="bg-[#0f172a]">Aguardando Pagamento</option>
+                   <option value="paid" className="bg-[#0f172a]">Já Pago / Quitado</option>
+                 </select>
+               </div>
+             </div>
+          </div>
+
+          <div className="flex flex-col gap-3 pt-4">
+            <button 
+              onClick={handlePrint} 
+              disabled={isEmitting}
+              className="w-full py-6 bg-blue-600 hover:bg-blue-500 text-white font-black uppercase text-[11px] tracking-widest rounded-3xl shadow-xl shadow-blue-600/20 active:scale-95 transition-all"
+            >
+              {isEmitting ? 'Gerando Documento...' : 'Finalizar & Gerar PDF Premium'}
+            </button>
+            <button 
+              onClick={() => setIsReviewModalOpen(false)} 
+              className="w-full py-4 text-slate-500 font-black uppercase text-[9px] tracking-widest hover:text-white transition-all"
+            >
+              Voltar ao Editor
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   if (view === 'validator') return <ValidationPortal />;
 
   if (!session) return (
@@ -1240,7 +1393,7 @@ const App: React.FC = () => {
             </button>
           </div>
           <div className="flex justify-center animate-in slide-in-from-right-10 duration-1000">
-            <div id="auth-form" className="w-full max-w-md bg-[#0f172a]/40 backdrop-blur-3xl p-8 md:p-12 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
+            <div id="auth-form" className="w-full max-md bg-[#0f172a]/40 backdrop-blur-3xl p-8 md:p-12 rounded-[3.5rem] border border-white/10 shadow-2xl relative">
               <div className="absolute -top-6 left-1/2 -translate-x-1/2 px-6 py-3 bg-emerald-500 text-white rounded-full text-[10px] font-black uppercase tracking-[0.2em] shadow-xl shadow-emerald-500/20 z-20 whitespace-nowrap">
                 {userCount < 500 ? `Restam ${Math.max(0, 500 - userCount)} Vagas Fundador` : 'Assinatura Padrão Ativa'}
               </div>
@@ -1275,9 +1428,14 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-[#020617] text-white font-['Inter'] relative">
       <ConfirmDialog {...confirmDialog} onCancel={() => setConfirmDialog({ ...confirmDialog, isOpen: false })} />
+      
+      <SubscriptionGate isOpen={mustPay && view !== 'landing'} onSubscribe={handleStripeCheckout} spotsLeft={spotsLeft} />
+
+      {isReviewModalOpen && <ReviewModal />}
+
       {isWhatsAppModalOpen && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-2xl animate-in fade-in zoom-in duration-300">
-            <div className="bg-[#0f172a] w-full max-w-md rounded-[3rem] border border-white/10 p-8 space-y-8 shadow-[0_50px_100px_-20px_rgba(0,0,0,1)]">
+            <div className="bg-[#0f172a] w-full max-md rounded-[3rem] border border-white/10 p-8 space-y-8 shadow-[0_50px_100px_-20px_rgba(0,0,0,1)]">
                 <header className="space-y-2">
                     <h3 className="text-2xl font-black text-white tracking-tighter uppercase">Enviar Documento</h3>
                     <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Protocolo de Envio WhatsApp</p>
@@ -1296,11 +1454,27 @@ const App: React.FC = () => {
                 </div>
                 <div className="flex flex-col gap-3">
                     <button onClick={handleSendWhatsAppFinal} className="w-full py-5 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase text-[11px] tracking-widest rounded-2xl shadow-xl shadow-emerald-600/20 active:scale-95 transition-all">Abrir WhatsApp</button>
-                    <button onClick={() => setIsWhatsAppModalOpen(false)} className="w-full py-4 text-slate-500 font-black uppercase text-[10px] tracking-widest hover:text-white transition-all">Cancelar</button>
+                    <button onClick={() => setIsWhatsAppModalOpen(false)} className="w-full py-4 text-slate-500 font-black uppercase text-core-10 tracking-widest hover:text-white transition-all">Cancelar</button>
                 </div>
             </div>
         </div>
       )}
+
+      {session && isTrialActive && view !== 'landing' && (
+        <div className="sticky top-0 z-[150] w-full bg-blue-600/95 backdrop-blur-md px-6 py-2 flex items-center justify-between shadow-lg">
+           <div className="flex items-center gap-4">
+              <span className="text-[9px] font-black text-white uppercase tracking-widest bg-white/10 px-3 py-1 rounded-full">Teste Grátis Ativo</span>
+              <p className="text-[10px] font-bold text-white/90">Você tem <strong className="text-white">{daysRemaining} dias</strong> de acesso total.</p>
+           </div>
+           {spotsLeft > 0 && (
+             <div className="flex items-center gap-4">
+                <p className="hidden sm:block text-[9px] font-black text-blue-100 uppercase tracking-widest animate-pulse">Garanta o valor vitalício: Restam {spotsLeft} vagas de Fundador!</p>
+                <button onClick={handleStripeCheckout} className="px-4 py-1.5 bg-white text-blue-600 rounded-lg text-[9px] font-black uppercase tracking-widest hover:bg-blue-50 transition-all shadow-md">Assinar R$ 16,90/mês</button>
+             </div>
+           )}
+        </div>
+      )}
+
       <div className="fixed top-8 right-8 z-[200] flex flex-col gap-4">
         {toasts.map(t => (
           <div key={t.id} className={`px-6 py-4 rounded-2xl border backdrop-blur-3xl shadow-2xl animate-in slide-in-from-right-10 ${t.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-blue-500/10 border-blue-500/20 text-blue-400'}`}>
@@ -1353,7 +1527,7 @@ const App: React.FC = () => {
            <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 shadow-xl flex flex-col md:flex-row gap-6">
              <div className="flex-1 relative">
                <input type="text" value={filterSearch} onChange={e => setFilterSearch(e.target.value)} placeholder="Pesquisar..." className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-blue-500/50" />
-               <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" cy1="21" x2="16.65" y2="16.65"></line></svg>
+               <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
              </div>
              <input type="month" value={filterMonth} onChange={e => setFilterMonth(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none" />
            </section>
@@ -1394,7 +1568,6 @@ const App: React.FC = () => {
               </div>
               {contractsViewTab === 'new' ? (
                 <section className="space-y-6">
-                  {/* CONFIGURAÇÃO DE COMPLEXIDADE */}
                   <div className="space-y-3">
                     <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Nível de Proteção Legal</label>
                     <div className="grid grid-cols-3 gap-2">
@@ -1436,7 +1609,6 @@ const App: React.FC = () => {
                   
                   <InputGroup label="Forma de Pagamento" value={contractForm.paymentMethod} onChange={e => setContractForm({...contractForm, paymentMethod: e.target.value})} placeholder="Ex: PIX ou Transferência" />
 
-                  {/* CUSTOMIZAÇÃO DE CLÁUSULAS */}
                   <div className="space-y-4 pt-4 border-t border-white/5">
                     <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest ml-1">Cláusulas de Proteção</label>
                     <div className="grid grid-cols-2 gap-3">
@@ -1474,7 +1646,7 @@ const App: React.FC = () => {
                 <div className="space-y-6">
                    <div className="relative">
                      <input type="text" value={contractFilterSearch} onChange={e => setContractFilterSearch(e.target.value)} placeholder="Pesquisar cliente..." className="w-full pl-10 pr-4 py-3 bg-white/5 border border-white/10 rounded-xl text-white text-xs outline-none" />
-                     <svg className="absolute left-3 top-3 text-slate-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" cy1="21" x2="16.65" y2="16.65"></line></svg>
+                     <svg className="absolute left-3 top-3 text-slate-500" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                    </div>
                    <div className="space-y-3">
                      {filteredContractHistory.map(item => (
@@ -1626,7 +1798,7 @@ const App: React.FC = () => {
               <div className="flex flex-col md:flex-row gap-4 mb-8">
                 <div className="flex-1 relative">
                   <input type="text" value={expFilterSearch} onChange={e => setExpFilterSearch(e.target.value)} placeholder="Pesquisar despesa..." className="w-full pl-12 pr-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white outline-none focus:border-emerald-500/50" />
-                  <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" cy1="21" x2="16.65" y2="16.65"></line></svg>
+                  <svg className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
                 </div>
                 <input type="month" value={expFilterMonth} onChange={e => setExpFilterMonth(e.target.value)} className="px-6 py-4 bg-white/5 border border-white/10 rounded-2xl text-white text-[10px] font-black uppercase outline-none" />
               </div>
@@ -1693,8 +1865,6 @@ const App: React.FC = () => {
                  </div>
               </header>
               <div className="space-y-12 pb-24">
-                
-                {/* IDENTIDADE VISUAL */}
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">Identidade Visual</h3>
                    <div className="space-y-8">
@@ -1720,7 +1890,6 @@ const App: React.FC = () => {
                    </div>
                 </section>
 
-                {/* CONFIGURAÇÕES DO DOCUMENTO */}
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Configurações do Documento</h3>
                    <div className="space-y-6">
@@ -1758,7 +1927,6 @@ const App: React.FC = () => {
                    <div className="space-y-6">{data.items.map(item => (<div key={item.id} className="p-6 bg-white/5 border border-white/10 rounded-[2rem] space-y-4 relative group"><button onClick={() => setData(prev => ({ ...prev, items: prev.items.filter(i => i.id !== item.id) }))} className="absolute -top-3 -right-3 w-8 h-8 bg-rose-600 text-white rounded-2xl text-[10px] font-black opacity-0 group-hover:opacity-100 transition-all shadow-xl">X</button><InputGroup label="Descrição" value={item.description} onChange={e => setData(prev => ({ ...prev, items: prev.items.map(i => i.id === item.id ? { ...i, description: e.target.value } : i) }))} /><div className="grid grid-cols-3 gap-4"><InputGroup label="Qtd" type="number" value={item.quantity} onChange={e => setData(prev => ({ ...prev, items: prev.items.map(i => i.id === item.id ? { ...i, quantity: parseFloat(e.target.value) || 0 } : i) }))} /><InputGroup label="Und" value={item.unit || ''} onChange={e => setData(prev => ({ ...prev, items: prev.items.map(i => i.id === item.id ? { ...i, unit: e.target.value } : i) }))} placeholder="UN, KG, H..." /><InputGroup label="V. Unitário" type="number" value={item.unitValue} onChange={e => setData(prev => ({ ...prev, items: prev.items.map(i => i.id === item.id ? { ...i, unitValue: parseFloat(e.target.value) || 0 } : i) }))} /></div></div>))}</div>
                 </section>
 
-                {/* TRIBUTAÇÃO & CLASSIFICAÇÃO */}
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Tributação & Classificação</h3>
                    <div className="space-y-6">
@@ -1781,7 +1949,6 @@ const App: React.FC = () => {
                    </div>
                 </section>
 
-                {/* AJUSTES & OBSERVAÇÕES */}
                 <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
                    <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Ajustes & Observações</h3>
                    <div className="space-y-6">
@@ -1791,23 +1958,10 @@ const App: React.FC = () => {
                    </div>
                 </section>
 
-                {/* PERSONALIZAÇÃO DE RÓTULOS */}
-                <section className="bg-white/5 p-8 rounded-[3rem] border border-white/10 space-y-8 shadow-2xl">
-                   <h3 className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Personalização de Rótulos</h3>
-                   <div className="space-y-6">
-                      <InputGroup label="Título do Documento" value={data.labels.documentTitle} onChange={e => setData({...data, labels: {...data.labels, documentTitle: e.target.value}})} />
-                      <InputGroup label="Subtítulo" value={data.labels.documentSubtitle} onChange={e => setData({...data, labels: {...data.labels, documentSubtitle: e.target.value}})} />
-                      <InputGroup label="Seção Prestador" value={data.labels.providerSection} onChange={e => setData({...data, labels: {...data.labels, providerSection: e.target.value}})} />
-                      <InputGroup label="Seção Tomador" value={data.labels.clientSection} onChange={e => setData({...data, labels: {...data.labels, clientSection: e.target.value}})} />
-                      <InputGroup label="Seção Itens" value={data.labels.itemsSection} onChange={e => setData({...data, labels: {...data.labels, itemsSection: e.target.value}})} />
-                      <InputGroup label="Texto Total" value={data.labels.totalLabel} onChange={e => setData({...data, labels: {...data.labels, totalLabel: e.target.value}})} />
-                   </div>
-                </section>
-
                 <div className="sticky bottom-0 bg-[#0f172a]/95 pt-10 pb-16 border-t border-white/10 z-30 lg:block hidden">
                    <div className="flex flex-col gap-4">
                         <button disabled={!data.pdfUrl} onClick={() => setIsWhatsAppModalOpen(true)} className={`w-full py-5 rounded-[2.5rem] text-white font-black uppercase text-[10px] tracking-widest transition-all flex items-center justify-center gap-3 ${!data.pdfUrl ? 'bg-slate-800 text-slate-600' : 'bg-emerald-600 hover:bg-emerald-500 active:scale-95'}`}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>{data.pdfUrl ? 'Enviar WhatsApp' : 'Gere o PDF para Enviar'}</button>
-                        <button disabled={isEmitting} onClick={handlePrint} className={`w-full py-8 rounded-[3rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'}`}>{isEmitting ? 'Gerando...' : currentInvoiceId ? 'Atualizar PDF' : 'Gerar PDF Premium'}</button>
+                        <button disabled={isEmitting} onClick={() => setIsReviewModalOpen(true)} className={`w-full py-8 rounded-[3rem] text-white font-black uppercase text-[11px] tracking-[0.5em] shadow-2xl transition-all active:scale-95 ${isEmitting ? 'bg-blue-600/50' : 'bg-blue-600 hover:bg-blue-500 shadow-blue-600/30'}`}>{isEmitting ? 'Gerando...' : 'Revisar & Gerar PDF Premium'}</button>
                    </div>
                 </div>
               </div>
