@@ -167,6 +167,7 @@ const EntityForm: React.FC<EntityFormProps> = ({ title, entity, updateFn, isClie
       {!isClient && (
         <InputGroup 
           label="Chave PIX (Padrão do Documento)" 
+          labelClass="text-blue-400"
           value={entity.pixKey || ''} 
           onChange={(e) => updateFn('pixKey', e.target.value)} 
           placeholder="CPF, CNPJ, E-mail ou Aleatória"
@@ -201,7 +202,7 @@ const App: React.FC = () => {
   });
   const [data, setData] = useState<InvoiceData>(INITIAL_DATA);
   const [currentInvoiceId, setCurrentInvoiceId] = useState<string | null>(null);
-  const [currentContractId, setCurrentContractId] = useState<string | null>(null);
+  const [currentContractId, setCurrentInvoiceIdContract] = useState<string | null>(null); // Usando alias para evitar conflito
   const [savedClients, setSavedClients] = useState<Entity[]>([]);
   const [history, setHistory] = useState<InvoiceHistoryItem[]>([]);
   const [contractHistory, setContractHistory] = useState<ContractHistoryItem[]>([]);
@@ -308,8 +309,7 @@ const App: React.FC = () => {
     }
 
     if (success === 'true') {
-      showToast("Pagamento confirmado! Bem-vindo ao Premium.", "success");
-      // Limpa a URL para não mostrar o toast toda hora que der refresh
+      showToast("Assinatura confirmada! Acesso Premium liberado.", "success");
       window.history.replaceState({}, '', window.location.pathname);
     }
 
@@ -388,11 +388,11 @@ const App: React.FC = () => {
     if (!session?.user) return showToast("Acesse sua conta para assinar.", "error");
     
     const priceId = spotsLeft > 0 ? STRIPE_PRICES.FOUNDER : STRIPE_PRICES.REGULAR;
-    
-    showToast("Preparando checkout seguro...", "info");
+    showToast("Abrindo checkout seguro...", "info");
     
     try {
-      console.log("Chamando Edge Function 'create-checkout-session'...");
+      // LOG DE DEPURAÇÃO: Ajuda a ver se a função existe
+      console.log("🛠️ Tentando invocar 'create-checkout-session'...");
       
       const { data: edgeData, error: edgeError } = await supabase.functions.invoke('create-checkout-session', {
         body: { 
@@ -404,26 +404,25 @@ const App: React.FC = () => {
       });
 
       if (edgeError) {
-        console.error("Erro na Edge Function:", edgeError);
-        throw new Error(edgeError.message || "Erro de rede ao conectar com o servidor.");
+        console.error("❌ Erro retornado pela função:", edgeError);
+        // Se o erro for net::ERR_FAILED no log do browser, o catch abaixo pegará
+        throw edgeError;
       }
 
       if (edgeData?.url) {
         window.location.href = edgeData.url;
-      } else if (edgeData?.error) {
-        throw new Error(edgeData.error);
       } else {
-        throw new Error("Resposta do servidor de checkout inválida.");
+        throw new Error("Servidor não retornou uma URL de checkout.");
       }
     } catch (err: any) {
-      console.error("Erro completo no checkout:", err);
+      console.error("🚨 Falha na chamada da Edge Function:", err);
       
-      // Mensagem amigável para erro de CORS/Preflight (geralmente net::ERR_FAILED)
-      const isConnectionError = err.message?.includes('Fetch') || err.message?.includes('failed to fetch');
+      // DIAGNÓSTICO ESPECÍFICO PARA O USUÁRIO
+      const isCorsError = err.message?.includes('Fetch') || err.name === 'TypeError';
       
-      const msg = isConnectionError 
-        ? "Erro de conexão: Verifique se sua Edge Function no Supabase está ativa e com cabeçalhos CORS configurados (OPTIONS request)." 
-        : `Erro: ${err.message || 'Tente novamente em instantes.'}`;
+      const msg = isCorsError 
+        ? "Erro de Servidor (CORS): A função 'create-checkout-session' não respondeu corretamente. Verifique se você adicionou o tratamento de 'OPTIONS' e os headers de CORS no código da função no Supabase." 
+        : `Erro: ${err.message || 'Tente novamente.'}`;
         
       showToast(msg, "error");
     }
@@ -671,7 +670,7 @@ const App: React.FC = () => {
       clauses: item.fullData.clauses || { fines: true, resignation: true }
     });
     setContractClient(savedClients.find(c => c.name === item.clientName) || item.fullData.client || null);
-    setCurrentContractId(item.id);
+    setCurrentInvoiceIdContract(item.id);
     setContractsViewTab('new');
     showToast('Contrato carregado para edição.', 'info');
   };
@@ -820,7 +819,7 @@ const App: React.FC = () => {
       setData(prev => ({ ...prev, pdfUrl: finalUrl || '', client: contractClient }));
       setWhatsAppRecipientPhone(contractClient.whatsapp || contractClient.phone || '');
       setIsWhatsAppModalOpen(true);
-      setCurrentContractId(null);
+      setCurrentInvoiceIdContract(null);
       loadContractHistory();
     } catch (err: any) { 
       console.error(err);
@@ -1562,7 +1561,7 @@ const App: React.FC = () => {
               <div className="flex justify-between items-center mb-6">
                  <h2 className="text-3xl font-black text-white tracking-tighter uppercase">Contratos Inteligentes</h2>
                  <div className="flex bg-white/5 p-1 rounded-xl">
-                   <button onClick={() => { setContractsViewTab('new'); setCurrentContractId(null); }} className={`px-4 py-2 text-[9px] font-black uppercase rounded-lg transition-all ${contractsViewTab === 'new' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>Novo</button>
+                   <button onClick={() => { setContractsViewTab('new'); setCurrentInvoiceIdContract(null); }} className={`px-4 py-2 text-[9px] font-black uppercase rounded-lg transition-all ${contractsViewTab === 'new' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>Novo</button>
                    <button onClick={() => setContractsViewTab('history')} className={`px-4 py-2 text-[9px] font-black uppercase rounded-lg transition-all ${contractsViewTab === 'history' ? 'bg-indigo-600 text-white' : 'text-slate-500'}`}>Histórico</button>
                  </div>
               </div>
@@ -1966,7 +1965,7 @@ const App: React.FC = () => {
                 </div>
               </div>
             </aside>
-            <main className={`flex-1 flex flex-col items-center lg:items-start p-4 sm:p-10 lg:p-12 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#020617] ${editorActiveTab === 'form' ? 'hidden lg:block' : 'block'}`}>
+            <main className={`flex-1 flex flex-col items-center lg:items-start p-4 sm:p-10 lg:p-12 overflow-y-auto lg:h-screen no-print scrollbar-hide bg-[#020617] ${editorActiveTab === 'preview' ? 'hidden lg:block' : 'block'}`}>
               <div className="w-full flex justify-center items-start lg:pt-10 py-10"><div className="relative w-[800px] origin-top scale-[0.35] sm:scale-[0.55] md:scale-[0.75] lg:scale-[0.65] xl:scale-[0.85] 2xl:scale-100 transition-all duration-700 mx-auto"><div ref={invoiceRef} className="shadow-[0_80px_160px_-40px_rgba(0,0,0,1)] bg-white"><InvoicePreview data={data} /></div></div></div>
             </main>
           </div>
