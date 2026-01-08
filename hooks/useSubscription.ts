@@ -3,11 +3,15 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { UserSubscription, SubscriptionStatus } from '../types';
 
-// IDs Reais do Stripe (Certifique-se de que estes batem com o seu Dashboard)
+// IDs do Stripe lidos de variáveis de ambiente (Vite precisa de prefixo VITE_)
 export const STRIPE_PRICES = {
-  FOUNDER: 'price_1SlefhPJVxZJJHnyq6gLY6Ev',
-  REGULAR: 'price_1SlegYPJVxZJJHnyS1Cfxql1'
+  FOUNDER: String(import.meta.env.VITE_STRIPE_PRICE_FOUNDER ?? ''),
+  REGULAR: String(import.meta.env.VITE_STRIPE_PRICE_REGULAR ?? '')
 };
+
+if (!STRIPE_PRICES.FOUNDER || !STRIPE_PRICES.REGULAR) {
+  console.warn('Aviso: VITE_STRIPE_PRICE_FOUNDER ou VITE_STRIPE_PRICE_REGULAR não definidos. Configure-os em .env.local');
+}
 
 export const useSubscription = (userId: string | undefined) => {
   const [subscription, setSubscription] = useState<UserSubscription | null>(null);
@@ -52,6 +56,12 @@ export const useSubscription = (userId: string | undefined) => {
           status: sub.status as SubscriptionStatus,
           trial_ends_at: sub.trial_ends_at,
           price_id: sub.price_id,
+          is_founder: sub.price_id === STRIPE_PRICES.FOUNDER
+        });
+        console.log(' Assinatura carregada:', {
+          status: sub.status,
+          price_id: sub.price_id,
+          trial_ends_at: sub.trial_ends_at,
           is_founder: sub.price_id === STRIPE_PRICES.FOUNDER
         });
       }

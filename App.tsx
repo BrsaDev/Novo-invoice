@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { InvoiceData, InvoiceItem, InvoiceLabels, Branding, Entity, InvoiceHistoryItem, InvoiceCategory, Expense, DasPayment, PaymentStatus, SignatureType, ContractHistoryItem, ContractStatus, ContractPeriodicity, ContractComplexity, ContractClauses, ViewState } from './types';
+import { SubscriptionsPageIntegrated } from './components/SubscriptionsPageIntegrated';
 import { InputGroup } from './components/InputGroup';
 import { InvoicePreview } from './components/InvoicePreview';
 import { ContractPreview } from './components/ContractPreview';
@@ -1510,6 +1511,11 @@ const App: React.FC = () => {
               <h3 className="text-xl font-black uppercase text-indigo-400">Contratos</h3>
               <p className="text-indigo-900 text-[9px] font-bold uppercase tracking-widest">Express Jurídico</p>
             </button>
+            <button onClick={() => setView('subscriptions')} className="p-8 bg-violet-600/5 border border-violet-600/10 rounded-[2.5rem] text-left group hover:border-violet-600/50 transition-all shadow-xl">
+              <div className="w-12 h-12 bg-violet-600/10 rounded-2xl mb-6 flex items-center justify-center group-hover:bg-violet-600 transition-all text-violet-400 group-hover:text-white">💜</div>
+              <h3 className="text-xl font-black uppercase text-violet-400">Assinaturas</h3>
+              <p className="text-violet-900 text-[9px] font-bold uppercase tracking-widest">Plano Premium</p>
+            </button>
           </div>
         </div>
       ) : view === 'history' ? (
@@ -1676,6 +1682,10 @@ const App: React.FC = () => {
               </div>
            </main>
            <ClientSearchModal isOpen={isContractClientModalOpen} onClose={() => setIsContractClientModalOpen(false)} clients={savedClients} onSelect={c => { setContractClient(c); setIsContractClientModalOpen(false); }} onDelete={async tid => { await supabase.from('clients').delete().match({ user_id: session.user.id, tax_id: tid }); loadClients(); }} />
+        </div>
+      ) : view === 'subscriptions' ? (
+        <div className="p-6 md:p-16 max-w-6xl mx-auto">
+          <SubscriptionsPageIntegrated userId={session?.user?.id} userEmail={session?.user?.email} onBack={() => setView('landing')} />
         </div>
       ) : view === 'financial-hub' ? (
         <div className="p-6 md:p-16 max-w-6xl mx-auto space-y-12 animate-in fade-in duration-500">

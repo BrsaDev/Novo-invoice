@@ -1,0 +1,14 @@
+{
+  "id": "evt_test_checkout_session",
+  "object": "event",
+  "type": "checkout.session.completed",
+  "data": {
+    "object": {
+      "id": "cs_test_123",
+      "object": "checkout.session",
+      "client_reference_id": "11111111-1111-1111-1111-111111111111",
+      "customer": "cus_test_123",
+      "subscription": "sub_test_123"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "evt_test_invoice",
+  "object": "event",
+  "type": "invoice.payment_succeeded",
+  "data": {
+    "object": {
+      "id": "in_test_123",
+      "object": "invoice",
+      "subscription": "sub_test_123",
+      "customer": "cus_test_123",
+      "amount_paid": 1000,
+      "currency": "brl",
+      "status": "paid",
+      "payment_intent": "pi_test_123"
+    }
+  }
+}

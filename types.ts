@@ -6,7 +6,7 @@ export type ContractStatus = 'active' | 'finished' | 'canceled';
 export type ContractPeriodicity = 'one-time' | 'monthly' | 'periodic';
 export type ContractComplexity = 'basic' | 'intermediate' | 'advanced';
 
-export type ViewState = 'landing' | 'editor' | 'history' | 'financial-hub' | 'contracts' | 'validator';
+export type ViewState = 'landing' | 'editor' | 'history' | 'financial-hub' | 'contracts' | 'validator' | 'subscriptions';
 
 export type SubscriptionStatus = 'trialing' | 'active' | 'past_due' | 'canceled' | 'unpaid' | 'none';
 
